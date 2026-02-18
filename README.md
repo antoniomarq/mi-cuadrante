@@ -35,3 +35,8 @@ Plugin para WordPress pensado para control personal de jornada laboral:
 
 - Los datos se guardan en una tabla propia de WordPress: `{wp_prefix}mcch_entries`.
 - Al desactivar el plugin no se eliminan datos.
+
+## Implementación multiusuario y cuadrante oficial
+
+Se añadió una guía técnica con SQL para Webmin y plan por fases en `IMPLEMENTACION_MULTIUSUARIO.md`.
+
