@@ -822,11 +822,19 @@ final class Mi_Cuadrante_Control_Horas
         ];
 
         $entry = wp_parse_args($entry ?? [], $default);
+        $redirect_to = '';
+
+        if (!is_admin()) {
+            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
+        }
         ?>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
             <input type="hidden" name="action" value="mcch_save_entry" />
             <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
             <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+            <?php if ($redirect_to !== '') : ?>
+                <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
+            <?php endif; ?>
             <?php wp_nonce_field(self::NONCE_ACTION_SAVE); ?>
 
             <label>
@@ -904,11 +912,19 @@ final class Mi_Cuadrante_Control_Horas
         ];
 
         $entry = wp_parse_args($entry ?? [], $default);
+        $redirect_to = '';
+
+        if (!is_admin()) {
+            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
+        }
         ?>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
             <input type="hidden" name="action" value="mcch_save_schedule" />
             <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
             <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+            <?php if ($redirect_to !== '') : ?>
+                <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
+            <?php endif; ?>
             <?php wp_nonce_field(self::NONCE_ACTION_SAVE_SCHEDULE); ?>
 
             <label>
@@ -1101,6 +1117,11 @@ final class Mi_Cuadrante_Control_Horas
             echo '<p>' . esc_html__('No hay registros para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
             return;
         }
+        $redirect_to = '';
+
+        if (!is_admin()) {
+            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
+        }
         ?>
         <div class="mcch-table-wrapper">
             <table class="widefat striped">
@@ -1141,6 +1162,9 @@ final class Mi_Cuadrante_Control_Horas
                                     <input type="hidden" name="action" value="mcch_delete_entry" />
                                     <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
                                     <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+                                    <?php if ($redirect_to !== '') : ?>
+                                        <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
+                                    <?php endif; ?>
                                     <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
                                     <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
                                         <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
@@ -1161,6 +1185,11 @@ final class Mi_Cuadrante_Control_Horas
         if (empty($entries)) {
             echo '<p>' . esc_html__('No hay planificación oficial para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
             return;
+        }
+        $redirect_to = '';
+
+        if (!is_admin()) {
+            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
         }
         ?>
         <div class="mcch-table-wrapper">
@@ -1191,6 +1220,9 @@ final class Mi_Cuadrante_Control_Horas
                                 <input type="hidden" name="action" value="mcch_delete_schedule" />
                                 <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
                                 <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+                                <?php if ($redirect_to !== '') : ?>
+                                    <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
+                                <?php endif; ?>
                                 <?php wp_nonce_field(self::NONCE_ACTION_DELETE_SCHEDULE); ?>
                                 <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar esta planificación oficial?', 'mi-cuadrante-control-horas')); ?>');">
                                     <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
@@ -1849,16 +1881,35 @@ final class Mi_Cuadrante_Control_Horas
     private function redirect_with_notice(string $type, string $message, ?int $target_user_id = null, string $page = 'mcch-dashboard'): void
     {
         $resolved_user_id = $target_user_id ?? $this->resolve_target_user_id($_REQUEST);
+        $month = isset($_REQUEST['month']) ? absint($_REQUEST['month']) : 0;
+        $year = isset($_REQUEST['year']) ? absint($_REQUEST['year']) : 0;
+        $redirect_to = '';
 
-        $url = add_query_arg(
-            [
-                'page' => $page,
-                'mcch_notice' => $type,
-                'mcch_message' => rawurlencode($message),
-                'user_id' => $resolved_user_id,
-            ],
-            admin_url('admin.php')
-        );
+        if (isset($_REQUEST['redirect_to'])) {
+            $requested_redirect = esc_url_raw(wp_unslash((string) $_REQUEST['redirect_to']));
+            $redirect_to = wp_validate_redirect($requested_redirect, '');
+        }
+
+        $query_args = [
+            'mcch_notice' => $type,
+            'mcch_message' => rawurlencode($message),
+            'user_id' => $resolved_user_id,
+        ];
+
+        if ($month > 0) {
+            $query_args['month'] = $month;
+        }
+
+        if ($year > 0) {
+            $query_args['year'] = $year;
+        }
+
+        if ($redirect_to === '') {
+            $query_args['page'] = $page;
+            $redirect_to = admin_url('admin.php');
+        }
+
+        $url = add_query_arg($query_args, $redirect_to);
 
         wp_safe_redirect($url);
         exit;
