@@ -901,19 +901,13 @@ final class Mi_Cuadrante_Control_Horas
         $entry['actual_end_time'] = $this->sanitize_hhmm_or_null($entry['actual_end_time'] ?? null);
         $entry['company_start_time'] = $this->sanitize_hhmm_or_null($entry['company_start_time'] ?? null);
         $entry['company_end_time'] = $this->sanitize_hhmm_or_null($entry['company_end_time'] ?? null);
-        $redirect_to = '';
-
-        if (!is_admin()) {
-            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
-        }
+        $redirect_to = $this->get_current_request_url();
         ?>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
             <input type="hidden" name="action" value="mcch_save_entry" />
             <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
             <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
-            <?php if ($redirect_to !== '') : ?>
-                <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
-            <?php endif; ?>
+            <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
             <?php wp_nonce_field(self::NONCE_ACTION_SAVE); ?>
 
             <label>
@@ -1018,19 +1012,13 @@ final class Mi_Cuadrante_Control_Horas
         ];
 
         $entry = wp_parse_args($entry ?? [], $default);
-        $redirect_to = '';
-
-        if (!is_admin()) {
-            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
-        }
+        $redirect_to = $this->get_current_request_url();
         ?>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
             <input type="hidden" name="action" value="mcch_save_schedule" />
             <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
             <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
-            <?php if ($redirect_to !== '') : ?>
-                <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
-            <?php endif; ?>
+            <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
             <?php wp_nonce_field(self::NONCE_ACTION_SAVE_SCHEDULE); ?>
 
             <label>
@@ -1233,11 +1221,7 @@ final class Mi_Cuadrante_Control_Horas
             echo '<p>' . esc_html__('No hay registros para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
             return;
         }
-        $redirect_to = '';
-
-        if (!is_admin()) {
-            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
-        }
+        $redirect_to = $this->get_current_request_url();
 
         $selected_period = $this->resolve_selected_month_year();
         ?>
@@ -1311,9 +1295,7 @@ final class Mi_Cuadrante_Control_Horas
                                         <input type="hidden" name="action" value="mcch_delete_entry" />
                                         <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
                                         <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
-                                        <?php if ($redirect_to !== '') : ?>
-                                            <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
-                                        <?php endif; ?>
+                                        <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
                                         <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
                                         <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
                                             <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
@@ -1336,11 +1318,7 @@ final class Mi_Cuadrante_Control_Horas
             echo '<p>' . esc_html__('No hay planificación oficial para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
             return;
         }
-        $redirect_to = '';
-
-        if (!is_admin()) {
-            $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
-        }
+        $redirect_to = $this->get_current_request_url();
 
         if ($current_month <= 0 || $current_year <= 0) {
             $period = $this->resolve_selected_month_year();
@@ -1404,9 +1382,7 @@ final class Mi_Cuadrante_Control_Horas
                                     <input type="hidden" name="action" value="mcch_delete_schedule" />
                                     <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
                                     <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
-                                    <?php if ($redirect_to !== '') : ?>
-                                        <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
-                                    <?php endif; ?>
+                                    <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
                                     <?php wp_nonce_field(self::NONCE_ACTION_DELETE_SCHEDULE); ?>
                                     <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar esta planificación oficial?', 'mi-cuadrante-control-horas')); ?>');">
                                         <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
@@ -2161,7 +2137,19 @@ final class Mi_Cuadrante_Control_Horas
             $redirect_to = wp_validate_redirect($requested_redirect, '');
         }
 
+        if ($redirect_to !== '') {
+            $query_args = [
+                'mcch_notice' => $type,
+                'mcch_message' => rawurlencode($message),
+            ];
+
+            $url = add_query_arg($query_args, $redirect_to);
+            wp_safe_redirect($url);
+            exit;
+        }
+
         $query_args = [
+            'page' => $page,
             'mcch_notice' => $type,
             'mcch_message' => rawurlencode($message),
             'user_id' => $resolved_user_id,
@@ -2175,15 +2163,20 @@ final class Mi_Cuadrante_Control_Horas
             $query_args['year'] = $year;
         }
 
-        if ($redirect_to === '') {
-            $query_args['page'] = $page;
-            $redirect_to = admin_url('admin.php');
-        }
-
-        $url = add_query_arg($query_args, $redirect_to);
+        $url = add_query_arg($query_args, admin_url('admin.php'));
 
         wp_safe_redirect($url);
         exit;
+    }
+
+    private function get_current_request_url(): string
+    {
+        $uri = isset($_SERVER['REQUEST_URI']) ? wp_unslash((string) $_SERVER['REQUEST_URI']) : '';
+        if ($uri === '') {
+            return home_url('/');
+        }
+
+        return esc_url_raw(home_url($uri));
     }
 
     private function get_capability(): string
