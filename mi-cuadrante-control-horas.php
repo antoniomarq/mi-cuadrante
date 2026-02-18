@@ -322,6 +322,15 @@ final class Mi_Cuadrante_Control_Horas
             'mcch-hr-overview',
             [$this, 'render_hr_overview_page']
         );
+
+        add_submenu_page(
+            'mcch-dashboard',
+            __('Configuración', 'mi-cuadrante-control-horas'),
+            __('Configuración', 'mi-cuadrante-control-horas'),
+            $capability,
+            'mcch-settings',
+            [$this, 'render_settings_page']
+        );
     }
 
     public function register_shortcodes(): void
@@ -332,7 +341,7 @@ final class Mi_Cuadrante_Control_Horas
 
     public function enqueue_assets(string $hook): void
     {
-        if (!in_array($hook, ['toplevel_page_mcch-dashboard', 'mi-cuadrante_page_mcch-official-schedule'], true)) {
+        if (!in_array($hook, ['toplevel_page_mcch-dashboard', 'mi-cuadrante_page_mcch-official-schedule', 'mi-cuadrante_page_mcch-settings'], true)) {
             return;
         }
 
@@ -652,6 +661,41 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
+    public function render_settings_page(): void
+    {
+        $this->assert_capability();
+        $shortcodes = $this->get_shortcode_definitions();
+        ?>
+        <div class="wrap mcch-wrap">
+            <h1><?php esc_html_e('Configuración', 'mi-cuadrante-control-horas'); ?></h1>
+
+            <div class="card" style="max-width: none; margin-top: 1rem;">
+                <h2><?php esc_html_e('Shortcodes disponibles', 'mi-cuadrante-control-horas'); ?></h2>
+                <p><?php esc_html_e('Puedes copiar estos shortcodes y pegarlos en páginas o entradas de WordPress.', 'mi-cuadrante-control-horas'); ?></p>
+
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e('Shortcode', 'mi-cuadrante-control-horas'); ?></th>
+                            <th><?php esc_html_e('Función', 'mi-cuadrante-control-horas'); ?></th>
+                            <th><?php esc_html_e('Ejemplo', 'mi-cuadrante-control-horas'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($shortcodes as $shortcode): ?>
+                            <tr>
+                                <td><code><?php echo esc_html($shortcode['tag']); ?></code></td>
+                                <td><?php echo esc_html($shortcode['description']); ?></td>
+                                <td><code><?php echo esc_html($shortcode['example']); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <?php
+    }
+
     public function shortcode_dashboard(array $atts = []): string
     {
         if (!is_user_logged_in()) {
@@ -710,6 +754,22 @@ final class Mi_Cuadrante_Control_Horas
         <?php
 
         return (string) ob_get_clean();
+    }
+
+    private function get_shortcode_definitions(): array
+    {
+        return [
+            [
+                'tag' => '[mcch_dashboard]',
+                'description' => __('Muestra el panel completo con formulario de jornada, filtros y resumen mensual del usuario.', 'mi-cuadrante-control-horas'),
+                'example' => '[mcch_dashboard]',
+            ],
+            [
+                'tag' => '[mcch_hours_summary]',
+                'description' => __('Muestra un resumen rápido de horas. Permite usar atributos month, year y user_id.', 'mi-cuadrante-control-horas'),
+                'example' => '[mcch_hours_summary month="3" year="2026" user_id="12"]',
+            ],
+        ];
     }
 
     private function render_dashboard_content(
