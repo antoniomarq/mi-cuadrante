@@ -572,6 +572,7 @@ final class Mi_Cuadrante_Control_Horas
         $target_user_id = $this->resolve_target_user_id($_GET);
         $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
         $summary = $this->calculate_summary($entries);
+        $schedule_summary = $this->get_schedule_summary($period['month'], $period['year'], $target_user_id);
         $period_balance = $this->get_period_balance_overview($target_user_id, $period['month'], $period['year']);
         $edit_entry = $this->get_edit_entry($target_user_id);
 
@@ -580,7 +581,7 @@ final class Mi_Cuadrante_Control_Horas
             <h1><?php esc_html_e('Mi Cuadrante - Control Personal', 'mi-cuadrante-control-horas'); ?></h1>
 
             <?php $this->render_notice(); ?>
-            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $period_balance, $edit_entry, true, $target_user_id); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $schedule_summary, $period_balance, $edit_entry, true, $target_user_id); ?>
         </div>
         <?php
     }
@@ -706,12 +707,13 @@ final class Mi_Cuadrante_Control_Horas
         $target_user_id = $this->resolve_target_user_id($_GET);
         $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
         $summary = $this->calculate_summary($entries);
+        $schedule_summary = $this->get_schedule_summary($period['month'], $period['year'], $target_user_id);
         $period_balance = $this->get_period_balance_overview($target_user_id, $period['month'], $period['year']);
 
         ob_start();
         ?>
         <div class="mcch-wrap mcch-shortcode-dashboard">
-            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $period_balance, null, false, $target_user_id); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $schedule_summary, $period_balance, null, false, $target_user_id); ?>
         </div>
         <?php
 
@@ -777,6 +779,7 @@ final class Mi_Cuadrante_Control_Horas
         int $current_year,
         array $entries,
         array $summary,
+        array $schedule_summary,
         array $period_balance,
         ?array $edit_entry,
         bool $is_admin,
@@ -792,7 +795,7 @@ final class Mi_Cuadrante_Control_Horas
             <section class="mcch-card">
                 <h2><?php esc_html_e('Resumen mensual', 'mi-cuadrante-control-horas'); ?></h2>
                 <?php $this->render_month_filter($current_month, $current_year, $is_admin, $target_user_id, 'mcch-dashboard'); ?>
-                <?php $this->render_summary($summary, $period_balance); ?>
+                <?php $this->render_summary($summary, $schedule_summary, $period_balance); ?>
             </section>
         </div>
 
@@ -840,14 +843,7 @@ final class Mi_Cuadrante_Control_Horas
                 <?php esc_html_e('Tipo de día', 'mi-cuadrante-control-horas'); ?>
                 <select name="turn_type">
                     <?php
-                    $types = [
-                        'normal' => __('Normal', 'mi-cuadrante-control-horas'),
-                        'festivo' => __('Festivo', 'mi-cuadrante-control-horas'),
-                        'guardia' => __('Guardia', 'mi-cuadrante-control-horas'),
-                        'baja' => __('Baja médica', 'mi-cuadrante-control-horas'),
-                    ];
-
-                    foreach ($types as $value => $label) {
+                    foreach ($this->get_turn_type_labels() as $value => $label) {
                         printf(
                             '<option value="%1$s" %2$s>%3$s</option>',
                             esc_attr($value),
@@ -929,14 +925,7 @@ final class Mi_Cuadrante_Control_Horas
                 <?php esc_html_e('Tipo de día', 'mi-cuadrante-control-horas'); ?>
                 <select name="turn_type">
                     <?php
-                    $types = [
-                        'normal' => __('Normal', 'mi-cuadrante-control-horas'),
-                        'festivo' => __('Festivo', 'mi-cuadrante-control-horas'),
-                        'guardia' => __('Guardia', 'mi-cuadrante-control-horas'),
-                        'baja' => __('Baja médica', 'mi-cuadrante-control-horas'),
-                    ];
-
-                    foreach ($types as $value => $label) {
+                    foreach ($this->get_turn_type_labels() as $value => $label) {
                         printf(
                             '<option value="%1$s" %2$s>%3$s</option>',
                             esc_attr($value),
@@ -1071,7 +1060,7 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_summary(array $summary, array $period_balance = []): void
+    private function render_summary(array $summary, array $schedule_summary = [], array $period_balance = []): void
     {
         $balance_class = $summary['difference_minutes'] >= 0 ? 'positive' : 'negative';
         ?>
@@ -1081,6 +1070,16 @@ final class Mi_Cuadrante_Control_Horas
             <li><strong><?php esc_html_e('Horas extra registradas', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html($this->minutes_to_human($summary['extra_minutes'])); ?></li>
             <li><strong><?php esc_html_e('Vacaciones', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) $summary['vacation_days']); ?></li>
             <li><strong><?php esc_html_e('Asuntos propios', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) $summary['personal_days']); ?></li>
+            <li><strong><?php esc_html_e('Permisos retribuidos', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($summary['paid_leave_days'] ?? 0)); ?></li>
+            <li><strong><?php esc_html_e('Días de baja', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($summary['sick_days'] ?? 0)); ?></li>
+            <li><strong><?php esc_html_e('Días de descanso', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($summary['rest_days'] ?? 0)); ?></li>
+            <?php if (!empty($schedule_summary)) : ?>
+                <li><strong><?php esc_html_e('Cuadrante empresa (horas planificadas)', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html($this->minutes_to_human((int) ($schedule_summary['planned_minutes'] ?? 0))); ?></li>
+                <li><strong><?php esc_html_e('Cuadrante empresa (descanso)', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($schedule_summary['rest_days'] ?? 0)); ?></li>
+                <li><strong><?php esc_html_e('Cuadrante empresa (vacaciones)', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($schedule_summary['vacation_days'] ?? 0)); ?></li>
+                <li><strong><?php esc_html_e('Cuadrante empresa (asuntos propios)', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($schedule_summary['personal_days'] ?? 0)); ?></li>
+                <li><strong><?php esc_html_e('Cuadrante empresa (permisos retribuidos)', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html((string) ($schedule_summary['paid_leave_days'] ?? 0)); ?></li>
+            <?php endif; ?>
             <li class="mcch-balance <?php echo esc_attr($balance_class); ?>">
                 <strong><?php esc_html_e('Diferencia (trabajadas - exigidas)', 'mi-cuadrante-control-horas'); ?>:</strong>
                 <?php echo esc_html($this->minutes_to_human($summary['difference_minutes'], true)); ?>
@@ -1126,7 +1125,7 @@ final class Mi_Cuadrante_Control_Horas
                     <tr>
                         <td><?php echo esc_html($entry['work_date']); ?></td>
                         <td><?php echo esc_html($entry['shift']); ?></td>
-                        <td><?php echo esc_html(ucfirst($entry['turn_type'])); ?></td>
+                        <td><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['worked_minutes'])); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['expected_minutes'])); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['extra_minutes'])); ?></td>
@@ -1181,7 +1180,7 @@ final class Mi_Cuadrante_Control_Horas
                     <tr>
                         <td><?php echo esc_html($entry['work_date']); ?></td>
                         <td><?php echo esc_html($entry['shift_name']); ?></td>
-                        <td><?php echo esc_html(ucfirst($entry['turn_type'])); ?></td>
+                        <td><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['planned_minutes'])); ?></td>
                         <td><?php echo esc_html($entry['notes']); ?></td>
                         <td>
@@ -1220,7 +1219,7 @@ final class Mi_Cuadrante_Control_Horas
             'personal_day' => isset($source['personal_day']) ? 1 : 0,
             'notes' => isset($source['notes']) ? sanitize_textarea_field($source['notes']) : '',
             'expected_minutes' => $this->time_to_minutes($source['expected_time'] ?? '00:00'),
-            'turn_type' => isset($source['turn_type']) ? sanitize_key($source['turn_type']) : 'normal',
+            'turn_type' => $this->sanitize_turn_type($source['turn_type'] ?? 'normal'),
         ];
     }
 
@@ -1231,7 +1230,7 @@ final class Mi_Cuadrante_Control_Horas
             'work_date' => isset($source['work_date']) ? sanitize_text_field($source['work_date']) : '',
             'planned_minutes' => $this->time_to_minutes($source['planned_time'] ?? '00:00'),
             'shift_name' => isset($source['shift_name']) ? sanitize_text_field($source['shift_name']) : '',
-            'turn_type' => isset($source['turn_type']) ? sanitize_key($source['turn_type']) : 'normal',
+            'turn_type' => $this->sanitize_turn_type($source['turn_type'] ?? 'normal'),
             'notes' => isset($source['notes']) ? sanitize_textarea_field($source['notes']) : '',
         ];
     }
@@ -1596,6 +1595,9 @@ final class Mi_Cuadrante_Control_Horas
             'extra_minutes' => 0,
             'vacation_days' => 0,
             'personal_days' => 0,
+            'paid_leave_days' => 0,
+            'sick_days' => 0,
+            'rest_days' => 0,
             'difference_minutes' => 0,
         ];
 
@@ -1606,13 +1608,74 @@ final class Mi_Cuadrante_Control_Horas
             $date_key = isset($entry['work_date']) ? (string) $entry['work_date'] : '';
             $summary['expected_minutes'] += $expected_by_date[$date_key] ?? (int) ($entry['expected_minutes'] ?? 0);
             $summary['extra_minutes'] += (int) ($entry['extra_minutes'] ?? 0);
-            $summary['vacation_days'] += (int) ($entry['vacation_day'] ?? 0);
-            $summary['personal_days'] += (int) ($entry['personal_day'] ?? 0);
+            $turn_type = $this->sanitize_turn_type($entry['turn_type'] ?? 'normal');
+            $summary['vacation_days'] += max((int) ($entry['vacation_day'] ?? 0), $turn_type === 'vacaciones' ? 1 : 0);
+            $summary['personal_days'] += max((int) ($entry['personal_day'] ?? 0), $turn_type === 'asuntos_propios' ? 1 : 0);
+            $summary['paid_leave_days'] += $turn_type === 'permiso_retribuido' ? 1 : 0;
+            $summary['sick_days'] += $turn_type === 'baja' ? 1 : 0;
+            $summary['rest_days'] += $turn_type === 'descanso' ? 1 : 0;
         }
 
         $summary['difference_minutes'] = $summary['worked_minutes'] - $summary['expected_minutes'];
 
         return $summary;
+    }
+
+    private function get_schedule_summary(int $month, int $year, int $target_user_id): array
+    {
+        $entries = $this->get_schedule_by_month($month, $year, $target_user_id);
+        $summary = [
+            'planned_minutes' => 0,
+            'rest_days' => 0,
+            'vacation_days' => 0,
+            'personal_days' => 0,
+            'paid_leave_days' => 0,
+        ];
+
+        foreach ($entries as $entry) {
+            $summary['planned_minutes'] += (int) ($entry['planned_minutes'] ?? 0);
+            $turn_type = $this->sanitize_turn_type($entry['turn_type'] ?? 'normal');
+            $summary['rest_days'] += $turn_type === 'descanso' ? 1 : 0;
+            $summary['vacation_days'] += $turn_type === 'vacaciones' ? 1 : 0;
+            $summary['personal_days'] += $turn_type === 'asuntos_propios' ? 1 : 0;
+            $summary['paid_leave_days'] += $turn_type === 'permiso_retribuido' ? 1 : 0;
+        }
+
+        return $summary;
+    }
+
+    private function get_turn_type_labels(): array
+    {
+        return [
+            'normal' => __('Normal', 'mi-cuadrante-control-horas'),
+            'festivo' => __('Festivo', 'mi-cuadrante-control-horas'),
+            'guardia' => __('Guardia', 'mi-cuadrante-control-horas'),
+            'descanso' => __('Descanso', 'mi-cuadrante-control-horas'),
+            'vacaciones' => __('Vacaciones', 'mi-cuadrante-control-horas'),
+            'asuntos_propios' => __('Asuntos propios', 'mi-cuadrante-control-horas'),
+            'permiso_retribuido' => __('Permiso retribuido', 'mi-cuadrante-control-horas'),
+            'baja' => __('Baja médica', 'mi-cuadrante-control-horas'),
+        ];
+    }
+
+    private function sanitize_turn_type($value): string
+    {
+        $turn_type = sanitize_key((string) $value);
+        $allowed = $this->get_turn_type_labels();
+
+        if (!array_key_exists($turn_type, $allowed)) {
+            return 'normal';
+        }
+
+        return $turn_type;
+    }
+
+    private function get_turn_type_label(string $turn_type): string
+    {
+        $labels = $this->get_turn_type_labels();
+        $turn_type = $this->sanitize_turn_type($turn_type);
+
+        return $labels[$turn_type] ?? $labels['normal'];
     }
 
     private function get_expected_minutes_for_entries(array $entries): array
