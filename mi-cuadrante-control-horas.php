@@ -198,7 +198,7 @@ final class MCCH_Legal_Calculator
 
 final class Mi_Cuadrante_Control_Horas
 {
-    private const DB_VERSION = '1.3.0';
+    private const DB_VERSION = '1.4.0';
     private const OPTION_DB_VERSION = 'mcch_db_version';
     private const OPTION_CAP = 'mcch_manage_cap';
     private const OPTION_MIGRATION_USER_ID = 'mcch_migration_user_id';
@@ -369,6 +369,16 @@ final class Mi_Cuadrante_Control_Horas
         $entry_id = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
         $data = $this->sanitize_entry_data($_POST);
 
+        if (($data['company_start_time'] === null || $data['company_end_time'] === null) && !empty($data['work_date'])) {
+            $official_times = $this->get_official_schedule_times((int) $data['user_id'], (string) $data['work_date']);
+            if ($data['company_start_time'] === null) {
+                $data['company_start_time'] = $official_times['planned_start_time'];
+            }
+            if ($data['company_end_time'] === null) {
+                $data['company_end_time'] = $official_times['planned_end_time'];
+            }
+        }
+
         if (empty($data['work_date'])) {
             $this->redirect_with_notice('error', __('La fecha es obligatoria.', 'mi-cuadrante-control-horas'));
         }
@@ -389,14 +399,14 @@ final class Mi_Cuadrante_Control_Horas
                 $table,
                 $data,
                 ['id' => $entry_id, 'user_id' => $entry_user_id],
-                ['%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s'],
+                ['%d', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s'],
                 ['%d', '%d']
             );
         } else {
             $result = $wpdb->insert(
                 $table,
                 $data,
-                ['%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s']
+                ['%d', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s']
             );
         }
 
@@ -469,14 +479,14 @@ final class Mi_Cuadrante_Control_Horas
                 $this->official_schedule_table_name(),
                 $data,
                 ['id' => $schedule_id, 'user_id' => $data['user_id']],
-                ['%d', '%s', '%d', '%s', '%s', '%s'],
+                ['%d', '%s', '%d', '%s', '%s', '%s', '%s', '%s'],
                 ['%d', '%d']
             );
         } else {
             $result = $wpdb->replace(
                 $this->official_schedule_table_name(),
                 $data,
-                ['%d', '%s', '%d', '%s', '%s', '%s']
+                ['%d', '%s', '%d', '%s', '%s', '%s', '%s', '%s']
             );
         }
 
@@ -812,7 +822,11 @@ final class Mi_Cuadrante_Control_Horas
             'id' => 0,
             'work_date' => wp_date('Y-m-d'),
             'shift' => '',
-            'worked_minutes' => 0,
+            'worked_minutes' => 0
+            'actual_start_time' => null,
+            'actual_end_time' => null,
+            'company_start_time' => null,
+            'company_end_time' => null,
             'expected_minutes' => 0,
             'extra_minutes' => 0,
             'vacation_day' => 0,
@@ -869,6 +883,16 @@ final class Mi_Cuadrante_Control_Horas
             </label>
 
             <label>
+                <?php esc_html_e('Inicio real', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" name="actual_start_time" value="<?php echo esc_attr((string) ($entry['actual_start_time'] ?? '')); ?>" />
+            </label>
+
+            <label>
+                <?php esc_html_e('Fin real', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" name="actual_end_time" value="<?php echo esc_attr((string) ($entry['actual_end_time'] ?? '')); ?>" />
+            </label>
+
+            <label>
                 <?php esc_html_e('Horas exigidas por empresa', 'mi-cuadrante-control-horas'); ?>
                 <input type="time" name="expected_time" value="<?php echo esc_attr($this->minutes_to_time((int) $entry['expected_minutes'])); ?>" required />
             </label>
@@ -906,6 +930,8 @@ final class Mi_Cuadrante_Control_Horas
             'id' => 0,
             'work_date' => wp_date('Y-m-d'),
             'planned_minutes' => 0,
+            'planned_start_time' => null,
+            'planned_end_time' => null,
             'shift_name' => '',
             'turn_type' => 'normal',
             'notes' => '',
@@ -956,6 +982,16 @@ final class Mi_Cuadrante_Control_Horas
             <label>
                 <?php esc_html_e('Minutos planificados', 'mi-cuadrante-control-horas'); ?>
                 <input type="time" name="planned_time" value="<?php echo esc_attr($this->minutes_to_time((int) $entry['planned_minutes'])); ?>" required />
+            </label>
+
+            <label>
+                <?php esc_html_e('Inicio planificado', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" name="planned_start_time" value="<?php echo esc_attr((string) ($entry['planned_start_time'] ?? '')); ?>" />
+            </label>
+
+            <label>
+                <?php esc_html_e('Fin planificado', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" name="planned_end_time" value="<?php echo esc_attr((string) ($entry['planned_end_time'] ?? '')); ?>" />
             </label>
 
             <label>
@@ -1131,7 +1167,11 @@ final class Mi_Cuadrante_Control_Horas
                     <th><?php esc_html_e('Turno', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Tipo', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Trabajadas', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Inicio real', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Fin real', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Exigidas', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Inicio empresa', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Fin empresa', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Extra', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Vacaciones', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Asuntos propios', 'mi-cuadrante-control-horas'); ?></th>
@@ -1148,7 +1188,11 @@ final class Mi_Cuadrante_Control_Horas
                         <td><?php echo esc_html($entry['shift']); ?></td>
                         <td><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['worked_minutes'])); ?></td>
+                        <td><?php echo esc_html($this->format_time_value($entry['actual_start_time'] ?? null)); ?></td>
+                        <td><?php echo esc_html($this->format_time_value($entry['actual_end_time'] ?? null)); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['expected_minutes'])); ?></td>
+                        <td><?php echo esc_html($this->format_time_value($entry['company_start_time'] ?? null)); ?></td>
+                        <td><?php echo esc_html($this->format_time_value($entry['company_end_time'] ?? null)); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['extra_minutes'])); ?></td>
                         <td><?php echo (int) $entry['vacation_day'] === 1 ? '✔' : '—'; ?></td>
                         <td><?php echo (int) $entry['personal_day'] === 1 ? '✔' : '—'; ?></td>
@@ -1200,6 +1244,8 @@ final class Mi_Cuadrante_Control_Horas
                     <th><?php esc_html_e('Turno oficial', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Tipo', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Planificadas', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Inicio planificado', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Fin planificado', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Notas', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Acciones', 'mi-cuadrante-control-horas'); ?></th>
                 </tr>
@@ -1211,6 +1257,8 @@ final class Mi_Cuadrante_Control_Horas
                         <td><?php echo esc_html($entry['shift_name']); ?></td>
                         <td><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
                         <td><?php echo esc_html($this->minutes_to_human((int) $entry['planned_minutes'])); ?></td>
+                        <td><?php echo esc_html($this->format_time_value($entry['planned_start_time'] ?? null)); ?></td>
+                        <td><?php echo esc_html($this->format_time_value($entry['planned_end_time'] ?? null)); ?></td>
                         <td><?php echo esc_html($entry['notes']); ?></td>
                         <td>
                             <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-official-schedule', 'edit_schedule' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
@@ -1246,6 +1294,10 @@ final class Mi_Cuadrante_Control_Horas
             'work_date' => isset($source['work_date']) ? sanitize_text_field($source['work_date']) : '',
             'shift' => isset($source['shift']) ? sanitize_text_field($source['shift']) : '',
             'worked_minutes' => $this->time_to_minutes($source['worked_time'] ?? '00:00'),
+            'actual_start_time' => $this->sanitize_hhmm_or_null($source['actual_start_time'] ?? null),
+            'actual_end_time' => $this->sanitize_hhmm_or_null($source['actual_end_time'] ?? null),
+            'company_start_time' => $this->sanitize_hhmm_or_null($source['company_start_time'] ?? null),
+            'company_end_time' => $this->sanitize_hhmm_or_null($source['company_end_time'] ?? null),
             'extra_minutes' => $this->time_to_minutes($source['extra_time'] ?? '00:00'),
             'vacation_day' => isset($source['vacation_day']) ? 1 : 0,
             'personal_day' => isset($source['personal_day']) ? 1 : 0,
@@ -1261,6 +1313,8 @@ final class Mi_Cuadrante_Control_Horas
             'user_id' => $this->resolve_target_user_id($source),
             'work_date' => isset($source['work_date']) ? sanitize_text_field($source['work_date']) : '',
             'planned_minutes' => $this->time_to_minutes($source['planned_time'] ?? '00:00'),
+            'planned_start_time' => $this->sanitize_hhmm_or_null($source['planned_start_time'] ?? null),
+            'planned_end_time' => $this->sanitize_hhmm_or_null($source['planned_end_time'] ?? null),
             'shift_name' => isset($source['shift_name']) ? sanitize_text_field($source['shift_name']) : '',
             'turn_type' => $this->sanitize_turn_type($source['turn_type'] ?? 'normal'),
             'notes' => isset($source['notes']) ? sanitize_textarea_field($source['notes']) : '',
@@ -1381,6 +1435,10 @@ final class Mi_Cuadrante_Control_Horas
             work_date DATE NOT NULL,
             shift VARCHAR(120) NOT NULL DEFAULT '',
             worked_minutes INT NOT NULL DEFAULT 0,
+            actual_start_time TIME NULL,
+            actual_end_time TIME NULL,
+            company_start_time TIME NULL,
+            company_end_time TIME NULL,
             extra_minutes INT NOT NULL DEFAULT 0,
             vacation_day TINYINT(1) NOT NULL DEFAULT 0,
             personal_day TINYINT(1) NOT NULL DEFAULT 0,
@@ -1402,6 +1460,8 @@ final class Mi_Cuadrante_Control_Horas
             user_id BIGINT UNSIGNED NOT NULL,
             work_date DATE NOT NULL,
             planned_minutes INT NOT NULL DEFAULT 0,
+            planned_start_time TIME NULL,
+            planned_end_time TIME NULL,
             shift_name VARCHAR(120) NOT NULL DEFAULT '',
             turn_type VARCHAR(30) NOT NULL DEFAULT 'normal',
             notes TEXT NULL,
@@ -1766,6 +1826,38 @@ final class Mi_Cuadrante_Control_Horas
         return $result;
     }
 
+    private function get_official_schedule_times(int $user_id, string $work_date): array
+    {
+        if ($user_id <= 0 || $work_date === '') {
+            return [
+                'planned_start_time' => null,
+                'planned_end_time' => null,
+            ];
+        }
+
+        global $wpdb;
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT planned_start_time, planned_end_time FROM {$this->official_schedule_table_name()} WHERE user_id = %d AND work_date = %s LIMIT 1",
+                $user_id,
+                $work_date
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($row)) {
+            return [
+                'planned_start_time' => null,
+                'planned_end_time' => null,
+            ];
+        }
+
+        return [
+            'planned_start_time' => $this->sanitize_hhmm_or_null($row['planned_start_time'] ?? null),
+            'planned_end_time' => $this->sanitize_hhmm_or_null($row['planned_end_time'] ?? null),
+        ];
+    }
+
     private function get_schedule_fallback_mode(): string
     {
         $mode = get_option(self::OPTION_SCHEDULE_FALLBACK_MODE, 'zero');
@@ -1858,6 +1950,37 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         return ($hours * 60) + $minutes;
+    }
+
+    private function sanitize_hhmm_or_null($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $time = sanitize_text_field((string) $value);
+        if ($time === '') {
+            return null;
+        }
+
+        if (!preg_match('/^(\d{2}):(\d{2})$/', $time, $matches)) {
+            return null;
+        }
+
+        $hours = (int) $matches[1];
+        $minutes = (int) $matches[2];
+
+        if ($hours < 0 || $hours > 23 || $minutes < 0 || $minutes > 59) {
+            return null;
+        }
+
+        return sprintf('%02d:%02d', $hours, $minutes);
+    }
+
+    private function format_time_value($value): string
+    {
+        $time = $this->sanitize_hhmm_or_null($value);
+        return $time ?? '—';
     }
 
     private function render_notice(): void
