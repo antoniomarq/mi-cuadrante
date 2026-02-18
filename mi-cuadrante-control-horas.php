@@ -13,9 +13,10 @@ if (!defined('ABSPATH')) {
 
 final class Mi_Cuadrante_Control_Horas
 {
-    private const DB_VERSION = '1.0.0';
+    private const DB_VERSION = '1.1.0';
     private const OPTION_DB_VERSION = 'mcch_db_version';
     private const OPTION_CAP = 'mcch_manage_cap';
+    private const OPTION_MIGRATION_USER_ID = 'mcch_migration_user_id';
     private const NONCE_ACTION_SAVE = 'mcch_save_entry';
     private const NONCE_ACTION_DELETE = 'mcch_delete_entry';
 
@@ -70,6 +71,10 @@ final class Mi_Cuadrante_Control_Horas
         if ($installed !== self::DB_VERSION) {
             $this->create_tables();
         }
+
+        $this->maybe_migrate_user_id();
+
+        update_option(self::OPTION_DB_VERSION, self::DB_VERSION);
     }
 
     public function register_admin_menu(): void
@@ -134,15 +139,15 @@ final class Mi_Cuadrante_Control_Horas
             $result = $wpdb->update(
                 $table,
                 $data,
-                ['id' => $entry_id],
-                ['%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s'],
-                ['%d']
+                ['id' => $entry_id, 'user_id' => $data['user_id']],
+                ['%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s'],
+                ['%d', '%d']
             );
         } else {
             $result = $wpdb->insert(
                 $table,
                 $data,
-                ['%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s']
+                ['%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s']
             );
         }
 
@@ -150,7 +155,7 @@ final class Mi_Cuadrante_Control_Horas
             $this->redirect_with_notice('error', __('No se pudo guardar el registro.', 'mi-cuadrante-control-horas'));
         }
 
-        $this->redirect_with_notice('success', __('Registro guardado correctamente.', 'mi-cuadrante-control-horas'));
+        $this->redirect_with_notice('success', __('Registro guardado correctamente.', 'mi-cuadrante-control-horas'), $data['user_id']);
     }
 
     public function handle_delete_entry(): void
@@ -159,6 +164,7 @@ final class Mi_Cuadrante_Control_Horas
         check_admin_referer(self::NONCE_ACTION_DELETE);
 
         $entry_id = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
+        $target_user_id = $this->resolve_target_user_id($_POST);
 
         if ($entry_id <= 0) {
             $this->redirect_with_notice('error', __('Registro inválido.', 'mi-cuadrante-control-horas'));
@@ -166,13 +172,13 @@ final class Mi_Cuadrante_Control_Horas
 
         global $wpdb;
 
-        $result = $wpdb->delete($this->table_name(), ['id' => $entry_id], ['%d']);
+        $result = $wpdb->delete($this->table_name(), ['id' => $entry_id, 'user_id' => $target_user_id], ['%d', '%d']);
 
         if ($result === false) {
             $this->redirect_with_notice('error', __('No se pudo eliminar el registro.', 'mi-cuadrante-control-horas'));
         }
 
-        $this->redirect_with_notice('success', __('Registro eliminado.', 'mi-cuadrante-control-horas'));
+        $this->redirect_with_notice('success', __('Registro eliminado.', 'mi-cuadrante-control-horas'), $target_user_id);
     }
 
     public function render_admin_page(): void
@@ -180,9 +186,10 @@ final class Mi_Cuadrante_Control_Horas
         $this->assert_capability();
 
         $period = $this->resolve_selected_month_year();
-        $entries = $this->get_entries_by_month($period['month'], $period['year']);
+        $target_user_id = $this->resolve_target_user_id($_GET);
+        $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
         $summary = $this->calculate_summary($entries);
-        $edit_entry = $this->get_edit_entry();
+        $edit_entry = $this->get_edit_entry($target_user_id);
 
         ?>
         <div class="wrap mcch-wrap">
@@ -201,13 +208,14 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         $period = $this->resolve_selected_month_year();
-        $entries = $this->get_entries_by_month($period['month'], $period['year']);
+        $target_user_id = $this->resolve_target_user_id($_GET);
+        $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
         $summary = $this->calculate_summary($entries);
 
         ob_start();
         ?>
         <div class="mcch-wrap mcch-shortcode-dashboard">
-            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, null, false); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, null, false, $target_user_id); ?>
         </div>
         <?php
 
@@ -229,7 +237,8 @@ final class Mi_Cuadrante_Control_Horas
         );
 
         $period = is_string($atts['period']) ? sanitize_key($atts['period']) : 'month';
-        $entries = $period === 'week' ? $this->get_entries_by_week() : $this->get_entries_by_month((int) wp_date('n'), (int) wp_date('Y'));
+        $target_user_id = $this->resolve_target_user_id($_GET);
+        $entries = $period === 'week' ? $this->get_entries_by_week($target_user_id) : $this->get_entries_by_month((int) wp_date('n'), (int) wp_date('Y'), $target_user_id);
         $summary = $this->calculate_summary($entries);
 
         ob_start();
@@ -257,30 +266,31 @@ final class Mi_Cuadrante_Control_Horas
         array $entries,
         array $summary,
         ?array $edit_entry,
-        bool $is_admin
+        bool $is_admin,
+        int $target_user_id
     ): void {
         ?>
         <div class="mcch-grid">
             <section class="mcch-card">
                 <h2><?php echo $edit_entry ? esc_html__('Editar registro', 'mi-cuadrante-control-horas') : esc_html__('Nuevo registro', 'mi-cuadrante-control-horas'); ?></h2>
-                <?php $this->render_entry_form($edit_entry); ?>
+                <?php $this->render_entry_form($edit_entry, $target_user_id); ?>
             </section>
 
             <section class="mcch-card">
                 <h2><?php esc_html_e('Resumen mensual', 'mi-cuadrante-control-horas'); ?></h2>
-                <?php $this->render_month_filter($current_month, $current_year, $is_admin); ?>
+                <?php $this->render_month_filter($current_month, $current_year, $is_admin, $target_user_id); ?>
                 <?php $this->render_summary($summary); ?>
             </section>
         </div>
 
         <section class="mcch-card">
             <h2><?php esc_html_e('Registros del mes', 'mi-cuadrante-control-horas'); ?></h2>
-            <?php $this->render_entries_table($entries, $is_admin); ?>
+            <?php $this->render_entries_table($entries, $is_admin, $target_user_id); ?>
         </section>
         <?php
     }
 
-    private function render_entry_form(?array $entry = null): void
+    private function render_entry_form(?array $entry = null, int $target_user_id = 0): void
     {
         $default = [
             'id' => 0,
@@ -300,6 +310,7 @@ final class Mi_Cuadrante_Control_Horas
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
             <input type="hidden" name="action" value="mcch_save_entry" />
             <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+            <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
             <?php wp_nonce_field(self::NONCE_ACTION_SAVE); ?>
 
             <label>
@@ -372,7 +383,7 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_month_filter(int $month, int $year, bool $is_admin = true): void
+    private function render_month_filter(int $month, int $year, bool $is_admin = true, int $target_user_id = 0): void
     {
         ?>
         <form method="get" class="mcch-filter">
@@ -393,6 +404,20 @@ final class Mi_Cuadrante_Control_Horas
                 <?php esc_html_e('Año', 'mi-cuadrante-control-horas'); ?>
                 <input type="number" name="year" min="2000" max="2100" value="<?php echo esc_attr((string) $year); ?>" />
             </label>
+            <?php if ($this->can_manage_all_entries()) : ?>
+                <label>
+                    <?php esc_html_e('Empleado', 'mi-cuadrante-control-horas'); ?>
+                    <select name="user_id">
+                        <?php foreach ($this->get_selectable_users() as $user) : ?>
+                            <option value="<?php echo esc_attr((string) $user['ID']); ?>" <?php selected($target_user_id, (int) $user['ID']); ?>>
+                                <?php echo esc_html($user['display_name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            <?php else : ?>
+                <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+            <?php endif; ?>
             <button type="submit" class="button"><?php esc_html_e('Filtrar', 'mi-cuadrante-control-horas'); ?></button>
         </form>
         <?php
@@ -416,7 +441,7 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_entries_table(array $entries, bool $show_actions = true): void
+    private function render_entries_table(array $entries, bool $show_actions = true, int $target_user_id = 0): void
     {
         if (empty($entries)) {
             echo '<p>' . esc_html__('No hay registros para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
@@ -455,12 +480,13 @@ final class Mi_Cuadrante_Control_Horas
                         <td><?php echo esc_html($entry['notes']); ?></td>
                         <?php if ($show_actions) : ?>
                             <td>
-                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id']], admin_url('admin.php'))); ?>">
+                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
                                     <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
                                 </a>
                                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
                                     <input type="hidden" name="action" value="mcch_delete_entry" />
                                     <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+                                    <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
                                     <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
                                     <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
                                         <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
@@ -478,7 +504,10 @@ final class Mi_Cuadrante_Control_Horas
 
     private function sanitize_entry_data(array $source): array
     {
+        $target_user_id = $this->resolve_target_user_id($source);
+
         return [
+            'user_id' => $target_user_id,
             'work_date' => isset($source['work_date']) ? sanitize_text_field($source['work_date']) : '',
             'shift' => isset($source['shift']) ? sanitize_text_field($source['shift']) : '',
             'worked_minutes' => $this->time_to_minutes($source['worked_time'] ?? '00:00'),
@@ -502,6 +531,7 @@ final class Mi_Cuadrante_Control_Horas
 
         $sql = "CREATE TABLE {$table} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id BIGINT UNSIGNED NOT NULL,
             work_date DATE NOT NULL,
             shift VARCHAR(120) NOT NULL DEFAULT '',
             worked_minutes INT NOT NULL DEFAULT 0,
@@ -514,6 +544,7 @@ final class Mi_Cuadrante_Control_Horas
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
+            KEY user_work_date (user_id, work_date),
             KEY work_date (work_date)
         ) {$charset};";
 
@@ -529,7 +560,7 @@ final class Mi_Cuadrante_Control_Horas
         return $wpdb->prefix . 'mcch_entries';
     }
 
-    private function get_entries_by_month(int $month, int $year): array
+    private function get_entries_by_month(int $month, int $year, int $target_user_id): array
     {
         global $wpdb;
 
@@ -538,7 +569,8 @@ final class Mi_Cuadrante_Control_Horas
 
         $rows = $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT * FROM {$this->table_name()} WHERE work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
+                "SELECT * FROM {$this->table_name()} WHERE user_id = %d AND work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
+                $target_user_id,
                 $start,
                 $end
             ),
@@ -548,7 +580,7 @@ final class Mi_Cuadrante_Control_Horas
         return is_array($rows) ? $rows : [];
     }
 
-    private function get_entries_by_week(): array
+    private function get_entries_by_week(int $target_user_id): array
     {
         global $wpdb;
 
@@ -557,7 +589,8 @@ final class Mi_Cuadrante_Control_Horas
 
         $rows = $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT * FROM {$this->table_name()} WHERE work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
+                "SELECT * FROM {$this->table_name()} WHERE user_id = %d AND work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
+                $target_user_id,
                 $start,
                 $end
             ),
@@ -586,7 +619,7 @@ final class Mi_Cuadrante_Control_Horas
         ];
     }
 
-    private function get_edit_entry(): ?array
+    private function get_edit_entry(int $target_user_id): ?array
     {
         if (!isset($_GET['edit'])) {
             return null;
@@ -601,7 +634,7 @@ final class Mi_Cuadrante_Control_Horas
         global $wpdb;
 
         $entry = $wpdb->get_row(
-            $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d", $entry_id),
+            $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d AND user_id = %d", $entry_id, $target_user_id),
             ARRAY_A
         );
 
@@ -689,13 +722,16 @@ final class Mi_Cuadrante_Control_Horas
         printf('<div class="%1$s"><p>%2$s</p></div>', esc_attr($class), esc_html($message));
     }
 
-    private function redirect_with_notice(string $type, string $message): void
+    private function redirect_with_notice(string $type, string $message, ?int $target_user_id = null): void
     {
+        $resolved_user_id = $target_user_id ?? $this->resolve_target_user_id($_REQUEST);
+
         $url = add_query_arg(
             [
                 'page' => 'mcch-dashboard',
                 'mcch_notice' => $type,
                 'mcch_message' => rawurlencode($message),
+                'user_id' => $resolved_user_id,
             ],
             admin_url('admin.php')
         );
@@ -713,9 +749,112 @@ final class Mi_Cuadrante_Control_Horas
 
     private function assert_capability(): void
     {
-        if (!current_user_can($this->get_capability())) {
+        if (!is_user_logged_in()) {
+            wp_die(esc_html__('Debes iniciar sesión para acceder.', 'mi-cuadrante-control-horas'));
+        }
+
+        if (!current_user_can($this->get_capability()) && !current_user_can('read')) {
             wp_die(esc_html__('No tienes permisos suficientes para acceder.', 'mi-cuadrante-control-horas'));
         }
+    }
+
+    private function can_manage_all_entries(): bool
+    {
+        return current_user_can($this->get_capability()) || current_user_can('manage_options');
+    }
+
+    private function resolve_target_user_id(array $source): int
+    {
+        $current_user_id = get_current_user_id();
+
+        if ($current_user_id <= 0) {
+            return 0;
+        }
+
+        if (!$this->can_manage_all_entries()) {
+            return $current_user_id;
+        }
+
+        $requested_user_id = isset($source['user_id']) ? absint($source['user_id']) : 0;
+
+        if ($requested_user_id > 0) {
+            return $requested_user_id;
+        }
+
+        return $current_user_id;
+    }
+
+    private function get_selectable_users(): array
+    {
+        $users = get_users(
+            [
+                'fields' => ['ID', 'display_name'],
+                'orderby' => 'display_name',
+                'order' => 'ASC',
+            ]
+        );
+
+        $result = [];
+
+        foreach ($users as $user) {
+            $result[] = [
+                'ID' => (int) $user->ID,
+                'display_name' => (string) $user->display_name,
+            ];
+        }
+
+        return $result;
+    }
+
+    private function maybe_migrate_user_id(): void
+    {
+        global $wpdb;
+
+        $table = $this->table_name();
+        $column = $wpdb->get_row($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'user_id'), ARRAY_A);
+
+        if (!is_array($column)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN user_id BIGINT UNSIGNED NULL AFTER id");
+            $column = $wpdb->get_row($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'user_id'), ARRAY_A);
+        }
+
+        $fallback_user_id = $this->get_migration_fallback_user_id();
+        $wpdb->query($wpdb->prepare("UPDATE {$table} SET user_id = %d WHERE user_id IS NULL OR user_id = 0", $fallback_user_id));
+
+        if (is_array($column) && isset($column['Null']) && strtoupper((string) $column['Null']) === 'YES') {
+            $wpdb->query("ALTER TABLE {$table} MODIFY COLUMN user_id BIGINT UNSIGNED NOT NULL");
+        }
+
+        $index_exists = $wpdb->get_var("SHOW INDEX FROM {$table} WHERE Key_name = 'user_work_date'");
+
+        if (!$index_exists) {
+            $wpdb->query("ALTER TABLE {$table} ADD KEY user_work_date (user_id, work_date)");
+        }
+    }
+
+    private function get_migration_fallback_user_id(): int
+    {
+        $option_user = absint((string) get_option(self::OPTION_MIGRATION_USER_ID, '0'));
+
+        if ($option_user > 0) {
+            return $option_user;
+        }
+
+        $admin_user = get_users(
+            [
+                'role' => 'administrator',
+                'orderby' => 'ID',
+                'order' => 'ASC',
+                'number' => 1,
+                'fields' => ['ID'],
+            ]
+        );
+
+        if (is_array($admin_user) && !empty($admin_user[0]->ID)) {
+            return (int) $admin_user[0]->ID;
+        }
+
+        return max(1, get_current_user_id());
     }
 }
 
