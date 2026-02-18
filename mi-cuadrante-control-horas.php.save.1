@@ -1236,31 +1236,9 @@ final class Mi_Cuadrante_Control_Horas
                         <td data-label="<?php esc_attr_e('Asuntos propios', 'mi-cuadrante-control-horas'); ?>"><?php echo (int) $entry['personal_day'] === 1 ? '✔' : '—'; ?></td>
                         <td data-label="<?php esc_attr_e('Notas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['notes']); ?></td>
                         <?php if ($show_actions) : ?>
-                            <?php
-                            $edit_url = add_query_arg(
-                                [
-                                    'page' => 'mcch-dashboard',
-                                    'edit' => (int) $entry['id'],
-                                    'user_id' => $target_user_id,
-                                ],
-                                admin_url('admin.php')
-                            );
-
-                            if (!is_admin()) {
-                                $edit_url = add_query_arg(
-                                    [
-                                        'edit' => (int) $entry['id'],
-                                        'month' => $selected_period['month'],
-                                        'year' => $selected_period['year'],
-                                        'user_id' => $target_user_id,
-                                    ]
-                                );
-                            }
-                            ?>
-
                             <td data-label="<?php esc_attr_e('Acciones', 'mi-cuadrante-control-horas'); ?>">
                                 <div class="mcch-action-buttons">
-                                    <a class="button button-small" href="<?php echo esc_url($edit_url); ?>">
+                                    <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
                                         <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
                                     </a>
                                     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
@@ -1695,10 +1673,6 @@ final class Mi_Cuadrante_Control_Horas
 
     private function get_edit_entry(int $target_user_id): ?array
     {
-        if (!is_user_logged_in()) {
-            return null;
-        }
-
         if (!isset($_GET['edit'])) {
             return null;
         }
