@@ -13,12 +13,16 @@ if (!defined('ABSPATH')) {
 
 final class Mi_Cuadrante_Control_Horas
 {
-    private const DB_VERSION = '1.1.0';
+    private const DB_VERSION = '1.2.0';
     private const OPTION_DB_VERSION = 'mcch_db_version';
     private const OPTION_CAP = 'mcch_manage_cap';
     private const OPTION_MIGRATION_USER_ID = 'mcch_migration_user_id';
+    private const OPTION_SCHEDULE_FALLBACK_MODE = 'mcch_schedule_fallback_mode';
+    private const OPTION_SCHEDULE_FALLBACK_MINUTES = 'mcch_schedule_fallback_minutes';
     private const NONCE_ACTION_SAVE = 'mcch_save_entry';
     private const NONCE_ACTION_DELETE = 'mcch_delete_entry';
+    private const NONCE_ACTION_SAVE_SCHEDULE = 'mcch_save_schedule';
+    private const NONCE_ACTION_DELETE_SCHEDULE = 'mcch_delete_schedule';
 
     private static ?Mi_Cuadrante_Control_Horas $instance = null;
 
@@ -39,6 +43,9 @@ final class Mi_Cuadrante_Control_Horas
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('admin_post_mcch_save_entry', [$this, 'handle_save_entry']);
         add_action('admin_post_mcch_delete_entry', [$this, 'handle_delete_entry']);
+        add_action('admin_post_mcch_save_schedule', [$this, 'handle_save_schedule']);
+        add_action('admin_post_mcch_delete_schedule', [$this, 'handle_delete_schedule']);
+        add_action('admin_post_mcch_save_schedule_fallback', [$this, 'handle_save_schedule_fallback']);
 
         if (is_admin()) {
             add_action('admin_init', [$this, 'maybe_upgrade_db']);
@@ -90,6 +97,15 @@ final class Mi_Cuadrante_Control_Horas
             'dashicons-calendar-alt',
             56
         );
+
+        add_submenu_page(
+            'mcch-dashboard',
+            __('Cuadrante oficial', 'mi-cuadrante-control-horas'),
+            __('Cuadrante oficial', 'mi-cuadrante-control-horas'),
+            $capability,
+            'mcch-official-schedule',
+            [$this, 'render_official_schedule_page']
+        );
     }
 
     public function register_shortcodes(): void
@@ -100,7 +116,7 @@ final class Mi_Cuadrante_Control_Horas
 
     public function enqueue_assets(string $hook): void
     {
-        if ($hook !== 'toplevel_page_mcch-dashboard') {
+        if (!in_array($hook, ['toplevel_page_mcch-dashboard', 'mi-cuadrante_page_mcch-official-schedule'], true)) {
             return;
         }
 
@@ -201,6 +217,87 @@ final class Mi_Cuadrante_Control_Horas
         $this->redirect_with_notice('success', __('Registro eliminado.', 'mi-cuadrante-control-horas'), $target_user_id);
     }
 
+    public function handle_save_schedule(): void
+    {
+        $this->assert_capability();
+        check_admin_referer(self::NONCE_ACTION_SAVE_SCHEDULE);
+
+        $schedule_id = isset($_POST['schedule_id']) ? absint($_POST['schedule_id']) : 0;
+        $data = $this->sanitize_schedule_data($_POST);
+
+        if (empty($data['work_date'])) {
+            $this->redirect_with_notice('error', __('La fecha es obligatoria.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
+        }
+
+        global $wpdb;
+
+        if ($schedule_id > 0) {
+            $result = $wpdb->update(
+                $this->official_schedule_table_name(),
+                $data,
+                ['id' => $schedule_id, 'user_id' => $data['user_id']],
+                ['%d', '%s', '%d', '%s', '%s', '%s'],
+                ['%d', '%d']
+            );
+        } else {
+            $result = $wpdb->replace(
+                $this->official_schedule_table_name(),
+                $data,
+                ['%d', '%s', '%d', '%s', '%s', '%s']
+            );
+        }
+
+        if ($result === false) {
+            $this->redirect_with_notice('error', __('No se pudo guardar la planificación oficial.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
+        }
+
+        $this->redirect_with_notice('success', __('Planificación oficial guardada correctamente.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
+    }
+
+    public function handle_delete_schedule(): void
+    {
+        $this->assert_capability();
+        check_admin_referer(self::NONCE_ACTION_DELETE_SCHEDULE);
+
+        $schedule_id = isset($_POST['schedule_id']) ? absint($_POST['schedule_id']) : 0;
+        $target_user_id = $this->resolve_target_user_id($_POST);
+
+        if ($schedule_id <= 0) {
+            $this->redirect_with_notice('error', __('Registro inválido.', 'mi-cuadrante-control-horas'), $target_user_id, 'mcch-official-schedule');
+        }
+
+        global $wpdb;
+        $result = $wpdb->delete($this->official_schedule_table_name(), ['id' => $schedule_id, 'user_id' => $target_user_id], ['%d', '%d']);
+
+        if ($result === false) {
+            $this->redirect_with_notice('error', __('No se pudo eliminar la planificación oficial.', 'mi-cuadrante-control-horas'), $target_user_id, 'mcch-official-schedule');
+        }
+
+        $this->redirect_with_notice('success', __('Planificación oficial eliminada.', 'mi-cuadrante-control-horas'), $target_user_id, 'mcch-official-schedule');
+    }
+
+    public function handle_save_schedule_fallback(): void
+    {
+        $this->assert_capability();
+        check_admin_referer(self::NONCE_ACTION_SAVE_SCHEDULE);
+
+        if (!$this->can_manage_all_entries()) {
+            $this->redirect_with_notice('error', __('No tienes permisos para configurar el fallback.', 'mi-cuadrante-control-horas'), null, 'mcch-official-schedule');
+        }
+
+        $mode = isset($_POST['fallback_mode']) ? sanitize_key($_POST['fallback_mode']) : 'zero';
+        if (!in_array($mode, ['zero', 'contract'], true)) {
+            $mode = 'zero';
+        }
+
+        $minutes = isset($_POST['fallback_minutes']) ? $this->time_to_minutes(sanitize_text_field((string) $_POST['fallback_minutes'])) : 0;
+
+        update_option(self::OPTION_SCHEDULE_FALLBACK_MODE, $mode);
+        update_option(self::OPTION_SCHEDULE_FALLBACK_MINUTES, $minutes);
+
+        $this->redirect_with_notice('success', __('Fallback de cuadrante oficial actualizado.', 'mi-cuadrante-control-horas'), null, 'mcch-official-schedule');
+    }
+
     public function render_admin_page(): void
     {
         $this->assert_capability();
@@ -216,7 +313,44 @@ final class Mi_Cuadrante_Control_Horas
             <h1><?php esc_html_e('Mi Cuadrante - Control Personal', 'mi-cuadrante-control-horas'); ?></h1>
 
             <?php $this->render_notice(); ?>
-            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $edit_entry, true); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $edit_entry, true, $target_user_id); ?>
+        </div>
+        <?php
+    }
+
+    public function render_official_schedule_page(): void
+    {
+        $this->assert_capability();
+
+        $period = $this->resolve_selected_month_year();
+        $target_user_id = $this->resolve_target_user_id($_GET);
+        $entries = $this->get_schedule_by_month($period['month'], $period['year'], $target_user_id);
+        $edit_entry = $this->get_edit_schedule($target_user_id);
+
+        ?>
+        <div class="wrap mcch-wrap">
+            <h1><?php esc_html_e('Cuadrante oficial', 'mi-cuadrante-control-horas'); ?></h1>
+
+            <?php $this->render_notice(); ?>
+
+            <div class="mcch-grid">
+                <section class="mcch-card">
+                    <h2><?php echo $edit_entry ? esc_html__('Editar planificación', 'mi-cuadrante-control-horas') : esc_html__('Nueva planificación', 'mi-cuadrante-control-horas'); ?></h2>
+                    <?php $this->render_schedule_form($edit_entry, $target_user_id); ?>
+                </section>
+
+                <section class="mcch-card">
+                    <h2><?php esc_html_e('Filtros y fallback', 'mi-cuadrante-control-horas'); ?></h2>
+                    <?php $this->render_month_filter($period['month'], $period['year'], true, $target_user_id, 'mcch-official-schedule'); ?>
+                    <?php $this->render_fallback_form(); ?>
+                    <?php $this->render_fallback_info(); ?>
+                </section>
+            </div>
+
+            <section class="mcch-card">
+                <h2><?php esc_html_e('Planificación del mes', 'mi-cuadrante-control-horas'); ?></h2>
+                <?php $this->render_schedule_table($entries, $target_user_id); ?>
+            </section>
         </div>
         <?php
     }
@@ -298,7 +432,7 @@ final class Mi_Cuadrante_Control_Horas
 
             <section class="mcch-card">
                 <h2><?php esc_html_e('Resumen mensual', 'mi-cuadrante-control-horas'); ?></h2>
-                <?php $this->render_month_filter($current_month, $current_year, $is_admin, $target_user_id); ?>
+                <?php $this->render_month_filter($current_month, $current_year, $is_admin, $target_user_id, 'mcch-dashboard'); ?>
                 <?php $this->render_summary($summary); ?>
             </section>
         </div>
@@ -403,12 +537,81 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_month_filter(int $month, int $year, bool $is_admin = true, int $target_user_id = 0): void
+    private function render_schedule_form(?array $entry = null, int $target_user_id = 0): void
+    {
+        $default = [
+            'id' => 0,
+            'work_date' => wp_date('Y-m-d'),
+            'planned_minutes' => 0,
+            'shift_name' => '',
+            'turn_type' => 'normal',
+            'notes' => '',
+        ];
+
+        $entry = wp_parse_args($entry ?? [], $default);
+        ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
+            <input type="hidden" name="action" value="mcch_save_schedule" />
+            <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+            <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+            <?php wp_nonce_field(self::NONCE_ACTION_SAVE_SCHEDULE); ?>
+
+            <label>
+                <?php esc_html_e('Fecha', 'mi-cuadrante-control-horas'); ?>
+                <input type="date" name="work_date" value="<?php echo esc_attr($entry['work_date']); ?>" required />
+            </label>
+
+            <label>
+                <?php esc_html_e('Turno oficial', 'mi-cuadrante-control-horas'); ?>
+                <input type="text" name="shift_name" value="<?php echo esc_attr($entry['shift_name']); ?>" placeholder="Mañana / Tarde / Noche" />
+            </label>
+
+            <label>
+                <?php esc_html_e('Tipo de día', 'mi-cuadrante-control-horas'); ?>
+                <select name="turn_type">
+                    <?php
+                    $types = [
+                        'normal' => __('Normal', 'mi-cuadrante-control-horas'),
+                        'festivo' => __('Festivo', 'mi-cuadrante-control-horas'),
+                        'guardia' => __('Guardia', 'mi-cuadrante-control-horas'),
+                        'baja' => __('Baja médica', 'mi-cuadrante-control-horas'),
+                    ];
+
+                    foreach ($types as $value => $label) {
+                        printf(
+                            '<option value="%1$s" %2$s>%3$s</option>',
+                            esc_attr($value),
+                            selected($entry['turn_type'], $value, false),
+                            esc_html($label)
+                        );
+                    }
+                    ?>
+                </select>
+            </label>
+
+            <label>
+                <?php esc_html_e('Minutos planificados', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" name="planned_time" value="<?php echo esc_attr($this->minutes_to_time((int) $entry['planned_minutes'])); ?>" required />
+            </label>
+
+            <label>
+                <?php esc_html_e('Notas', 'mi-cuadrante-control-horas'); ?>
+                <textarea name="notes" rows="4"><?php echo esc_textarea($entry['notes']); ?></textarea>
+            </label>
+
+            <button type="submit" class="button button-primary">
+                <?php echo $entry['id'] ? esc_html__('Actualizar planificación', 'mi-cuadrante-control-horas') : esc_html__('Guardar planificación', 'mi-cuadrante-control-horas'); ?>
+            </button>
+        </form>
+        <?php
+    }
+
+    private function render_month_filter(int $month, int $year, bool $is_admin = true, int $target_user_id = 0, string $page = 'mcch-dashboard'): void
     {
         ?>
         <form method="get" class="mcch-filter">
             <?php if ($is_admin) : ?>
-                <input type="hidden" name="page" value="mcch-dashboard" />
+                <input type="hidden" name="page" value="<?php echo esc_attr($page); ?>" />
             <?php endif; ?>
             <label>
                 <?php esc_html_e('Mes', 'mi-cuadrante-control-horas'); ?>
@@ -439,6 +642,56 @@ final class Mi_Cuadrante_Control_Horas
                 <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
             <?php endif; ?>
             <button type="submit" class="button"><?php esc_html_e('Filtrar', 'mi-cuadrante-control-horas'); ?></button>
+        </form>
+        <?php
+    }
+
+    private function render_fallback_info(): void
+    {
+        $fallback_mode = $this->get_schedule_fallback_mode();
+        $fallback_minutes = $this->get_schedule_fallback_minutes();
+        ?>
+        <p>
+            <?php
+            if ($fallback_mode === 'contract') {
+                printf(
+                    esc_html__('Fallback actual cuando no hay cuadrante oficial: valor configurable por contrato (%s).', 'mi-cuadrante-control-horas'),
+                    esc_html($this->minutes_to_human($fallback_minutes))
+                );
+            } else {
+                esc_html_e('Fallback actual cuando no hay cuadrante oficial: 0 minutos.', 'mi-cuadrante-control-horas');
+            }
+            ?>
+        </p>
+        <?php
+    }
+
+    private function render_fallback_form(): void
+    {
+        if (!$this->can_manage_all_entries()) {
+            return;
+        }
+
+        $mode = $this->get_schedule_fallback_mode();
+        $minutes = $this->get_schedule_fallback_minutes();
+        ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
+            <input type="hidden" name="action" value="mcch_save_schedule_fallback" />
+            <?php wp_nonce_field(self::NONCE_ACTION_SAVE_SCHEDULE); ?>
+            <label>
+                <?php esc_html_e('Modo fallback (sin planificación oficial)', 'mi-cuadrante-control-horas'); ?>
+                <select name="fallback_mode">
+                    <option value="zero" <?php selected($mode, 'zero'); ?>><?php esc_html_e('0 minutos', 'mi-cuadrante-control-horas'); ?></option>
+                    <option value="contract" <?php selected($mode, 'contract'); ?>><?php esc_html_e('Valor fijo configurable', 'mi-cuadrante-control-horas'); ?></option>
+                </select>
+            </label>
+            <label>
+                <?php esc_html_e('Minutos fallback (valor fijo)', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" name="fallback_minutes" value="<?php echo esc_attr($this->minutes_to_time($minutes)); ?>" />
+            </label>
+            <button type="submit" class="button">
+                <?php esc_html_e('Guardar fallback', 'mi-cuadrante-control-horas'); ?>
+            </button>
         </form>
         <?php
     }
@@ -522,6 +775,55 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
+    private function render_schedule_table(array $entries, int $target_user_id): void
+    {
+        if (empty($entries)) {
+            echo '<p>' . esc_html__('No hay planificación oficial para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
+            return;
+        }
+        ?>
+        <div class="mcch-table-wrapper">
+            <table class="widefat striped">
+                <thead>
+                <tr>
+                    <th><?php esc_html_e('Fecha', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Turno oficial', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Tipo', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Planificadas', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Notas', 'mi-cuadrante-control-horas'); ?></th>
+                    <th><?php esc_html_e('Acciones', 'mi-cuadrante-control-horas'); ?></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($entries as $entry) : ?>
+                    <tr>
+                        <td><?php echo esc_html($entry['work_date']); ?></td>
+                        <td><?php echo esc_html($entry['shift_name']); ?></td>
+                        <td><?php echo esc_html(ucfirst($entry['turn_type'])); ?></td>
+                        <td><?php echo esc_html($this->minutes_to_human((int) $entry['planned_minutes'])); ?></td>
+                        <td><?php echo esc_html($entry['notes']); ?></td>
+                        <td>
+                            <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-official-schedule', 'edit_schedule' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
+                                <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
+                            </a>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
+                                <input type="hidden" name="action" value="mcch_delete_schedule" />
+                                <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+                                <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+                                <?php wp_nonce_field(self::NONCE_ACTION_DELETE_SCHEDULE); ?>
+                                <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar esta planificación oficial?', 'mi-cuadrante-control-horas')); ?>');">
+                                    <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php
+    }
+
     private function sanitize_entry_data(array $source): array
     {
         $target_user_id = $this->resolve_target_user_id($source);
@@ -537,6 +839,18 @@ final class Mi_Cuadrante_Control_Horas
             'notes' => isset($source['notes']) ? sanitize_textarea_field($source['notes']) : '',
             'expected_minutes' => $this->time_to_minutes($source['expected_time'] ?? '00:00'),
             'turn_type' => isset($source['turn_type']) ? sanitize_key($source['turn_type']) : 'normal',
+        ];
+    }
+
+    private function sanitize_schedule_data(array $source): array
+    {
+        return [
+            'user_id' => $this->resolve_target_user_id($source),
+            'work_date' => isset($source['work_date']) ? sanitize_text_field($source['work_date']) : '',
+            'planned_minutes' => $this->time_to_minutes($source['planned_time'] ?? '00:00'),
+            'shift_name' => isset($source['shift_name']) ? sanitize_text_field($source['shift_name']) : '',
+            'turn_type' => isset($source['turn_type']) ? sanitize_key($source['turn_type']) : 'normal',
+            'notes' => isset($source['notes']) ? sanitize_textarea_field($source['notes']) : '',
         ];
     }
 
@@ -570,6 +884,32 @@ final class Mi_Cuadrante_Control_Horas
 
         dbDelta($sql);
 
+        $official_schedule = $this->official_schedule_table_name();
+        $official_schedule_sql = "CREATE TABLE {$official_schedule} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id BIGINT UNSIGNED NOT NULL,
+            work_date DATE NOT NULL,
+            planned_minutes INT NOT NULL DEFAULT 0,
+            shift_name VARCHAR(120) NOT NULL DEFAULT '',
+            turn_type VARCHAR(30) NOT NULL DEFAULT 'normal',
+            notes TEXT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_user_date (user_id, work_date),
+            KEY idx_work_date (work_date)
+        ) {$charset};";
+
+        dbDelta($official_schedule_sql);
+
+        if (!get_option(self::OPTION_SCHEDULE_FALLBACK_MODE)) {
+            update_option(self::OPTION_SCHEDULE_FALLBACK_MODE, 'zero');
+        }
+
+        if (!get_option(self::OPTION_SCHEDULE_FALLBACK_MINUTES)) {
+            update_option(self::OPTION_SCHEDULE_FALLBACK_MINUTES, 480);
+        }
+
         update_option(self::OPTION_DB_VERSION, self::DB_VERSION);
     }
 
@@ -578,6 +918,13 @@ final class Mi_Cuadrante_Control_Horas
         global $wpdb;
 
         return $wpdb->prefix . 'mcch_entries';
+    }
+
+    private function official_schedule_table_name(): string
+    {
+        global $wpdb;
+
+        return $wpdb->prefix . 'mcch_official_schedule';
     }
 
     private function get_entries_by_month(int $month, int $year, int $target_user_id): array
@@ -590,6 +937,26 @@ final class Mi_Cuadrante_Control_Horas
         $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT * FROM {$this->table_name()} WHERE user_id = %d AND work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
+                $target_user_id,
+                $start,
+                $end
+            ),
+            ARRAY_A
+        );
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    private function get_schedule_by_month(int $month, int $year, int $target_user_id): array
+    {
+        global $wpdb;
+
+        $start = sprintf('%04d-%02d-01', $year, $month);
+        $end = wp_date('Y-m-t', strtotime($start));
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT * FROM {$this->official_schedule_table_name()} WHERE user_id = %d AND work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
                 $target_user_id,
                 $start,
                 $end
@@ -658,25 +1025,29 @@ final class Mi_Cuadrante_Control_Horas
                 $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d", $entry_id),
                 ARRAY_A
             );
-        } else {
-            $entry = $wpdb->get_row(
-                $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d AND user_id = %d", $entry_id, $target_user_id),
-                ARRAY_A
-            );
-        }
 
-        if (!is_array($entry)) {
-            $this->log_unauthorized_attempt('edit_entry', $entry_id, $target_user_id);
+        return is_array($entry) ? $entry : null;
+    }
+
+    private function get_edit_schedule(int $target_user_id): ?array
+    {
+        if (!isset($_GET['edit_schedule'])) {
             return null;
         }
 
-        if (!$this->can_manage_entry((int) $entry['user_id'])) {
-            $this->log_unauthorized_attempt('edit_entry', $entry_id, (int) $entry['user_id']);
+        $schedule_id = absint($_GET['edit_schedule']);
+
+        if ($schedule_id <= 0) {
             return null;
         }
 
-        return $entry;
+        global $wpdb;
+        $entry = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$this->official_schedule_table_name()} WHERE id = %d AND user_id = %d", $schedule_id, $target_user_id),
+            ARRAY_A
+        );
 
+        return is_array($entry) ? $entry : null;
     }
 
     private function calculate_summary(array $entries): array
@@ -690,9 +1061,12 @@ final class Mi_Cuadrante_Control_Horas
             'difference_minutes' => 0,
         ];
 
+        $expected_by_date = $this->get_expected_minutes_for_entries($entries);
+
         foreach ($entries as $entry) {
             $summary['worked_minutes'] += (int) ($entry['worked_minutes'] ?? 0);
-            $summary['expected_minutes'] += (int) ($entry['expected_minutes'] ?? 0);
+            $date_key = isset($entry['work_date']) ? (string) $entry['work_date'] : '';
+            $summary['expected_minutes'] += $expected_by_date[$date_key] ?? (int) ($entry['expected_minutes'] ?? 0);
             $summary['extra_minutes'] += (int) ($entry['extra_minutes'] ?? 0);
             $summary['vacation_days'] += (int) ($entry['vacation_day'] ?? 0);
             $summary['personal_days'] += (int) ($entry['personal_day'] ?? 0);
@@ -701,6 +1075,82 @@ final class Mi_Cuadrante_Control_Horas
         $summary['difference_minutes'] = $summary['worked_minutes'] - $summary['expected_minutes'];
 
         return $summary;
+    }
+
+    private function get_expected_minutes_for_entries(array $entries): array
+    {
+        if (empty($entries)) {
+            return [];
+        }
+
+        $user_id = isset($entries[0]['user_id']) ? (int) $entries[0]['user_id'] : 0;
+        if ($user_id <= 0) {
+            return [];
+        }
+
+        $dates = [];
+        foreach ($entries as $entry) {
+            if (!empty($entry['work_date'])) {
+                $dates[] = sanitize_text_field((string) $entry['work_date']);
+            }
+        }
+
+        $dates = array_values(array_unique($dates));
+        if (empty($dates)) {
+            return [];
+        }
+
+        global $wpdb;
+        $placeholders = implode(', ', array_fill(0, count($dates), '%s'));
+        $query = "SELECT work_date, planned_minutes FROM {$this->official_schedule_table_name()} WHERE user_id = %d AND work_date IN ({$placeholders})";
+        $params = array_merge([$user_id], $dates);
+        $rows = $wpdb->get_results($wpdb->prepare($query, ...$params), ARRAY_A);
+
+        $official = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $official[(string) $row['work_date']] = (int) $row['planned_minutes'];
+            }
+        }
+
+        $fallback = $this->resolve_fallback_minutes();
+        $result = [];
+
+        foreach ($entries as $entry) {
+            $date = isset($entry['work_date']) ? (string) $entry['work_date'] : '';
+            if ($date === '') {
+                continue;
+            }
+
+            if (array_key_exists($date, $official)) {
+                $result[$date] = $official[$date];
+                continue;
+            }
+
+            $result[$date] = $fallback;
+        }
+
+        return $result;
+    }
+
+    private function get_schedule_fallback_mode(): string
+    {
+        $mode = get_option(self::OPTION_SCHEDULE_FALLBACK_MODE, 'zero');
+        return $mode === 'contract' ? 'contract' : 'zero';
+    }
+
+    private function get_schedule_fallback_minutes(): int
+    {
+        return max(0, absint((string) get_option(self::OPTION_SCHEDULE_FALLBACK_MINUTES, '480')));
+    }
+
+    private function resolve_fallback_minutes(): int
+    {
+        if ($this->get_schedule_fallback_mode() === 'contract') {
+            return $this->get_schedule_fallback_minutes();
+        }
+
+        return 0;
     }
 
     private function minutes_to_human(int $minutes, bool $signed = false): string
@@ -760,13 +1210,13 @@ final class Mi_Cuadrante_Control_Horas
         printf('<div class="%1$s"><p>%2$s</p></div>', esc_attr($class), esc_html($message));
     }
 
-    private function redirect_with_notice(string $type, string $message, ?int $target_user_id = null): void
+    private function redirect_with_notice(string $type, string $message, ?int $target_user_id = null, string $page = 'mcch-dashboard'): void
     {
         $resolved_user_id = $target_user_id ?? $this->resolve_target_user_id($_REQUEST);
 
         $url = add_query_arg(
             [
-                'page' => 'mcch-dashboard',
+                'page' => $page,
                 'mcch_notice' => $type,
                 'mcch_message' => rawurlencode($message),
                 'user_id' => $resolved_user_id,
