@@ -851,6 +851,10 @@ final class Mi_Cuadrante_Control_Horas
         ];
 
         $entry = wp_parse_args($entry ?? [], $default);
+        $entry['actual_start_time'] = $this->sanitize_hhmm_or_null($entry['actual_start_time'] ?? null);
+        $entry['actual_end_time'] = $this->sanitize_hhmm_or_null($entry['actual_end_time'] ?? null);
+        $entry['company_start_time'] = $this->sanitize_hhmm_or_null($entry['company_start_time'] ?? null);
+        $entry['company_end_time'] = $this->sanitize_hhmm_or_null($entry['company_end_time'] ?? null);
         $redirect_to = '';
 
         if (!is_admin()) {
@@ -1999,14 +2003,19 @@ final class Mi_Cuadrante_Control_Horas
             return null;
         }
 
-        if (!preg_match('/^(\d{2}):(\d{2})$/', $time, $matches)) {
+        if (!preg_match('/^(\d{2}):(\d{2})(?::(\d{2}))?$/', $time, $matches)) {
             return null;
         }
 
         $hours = (int) $matches[1];
         $minutes = (int) $matches[2];
+        $seconds = isset($matches[3]) && $matches[3] !== '' ? (int) $matches[3] : null;
 
         if ($hours < 0 || $hours > 23 || $minutes < 0 || $minutes > 59) {
+            return null;
+        }
+
+        if ($seconds !== null && ($seconds < 0 || $seconds > 59)) {
             return null;
         }
 
