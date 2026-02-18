@@ -11,9 +11,194 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+final class MCCH_Legal_Calculator
+{
+    private wpdb $wpdb;
+    private string $entries_table;
+    private string $schedule_table;
+    private string $period_balance_table;
+    private string $alerts_table;
+
+    public function __construct(wpdb $wpdb, string $entries_table, string $schedule_table, string $period_balance_table, string $alerts_table)
+    {
+        $this->wpdb = $wpdb;
+        $this->entries_table = $entries_table;
+        $this->schedule_table = $schedule_table;
+        $this->period_balance_table = $period_balance_table;
+        $this->alerts_table = $alerts_table;
+    }
+
+    public function recalculate_for_user_and_date(int $user_id, string $work_date, int $fallback_minutes = 0): void
+    {
+        if ($user_id <= 0 || $work_date === '') {
+            return;
+        }
+
+        $week = $this->build_week_period($work_date);
+        $month = $this->build_month_period($work_date);
+
+        $this->upsert_period_balance($user_id, 'week', $week['period_key'], $week['start'], $week['end'], $fallback_minutes);
+        $this->upsert_period_balance($user_id, 'month', $month['period_key'], $month['start'], $month['end'], $fallback_minutes);
+    }
+
+    private function upsert_period_balance(int $user_id, string $period_type, string $period_key, string $start, string $end, int $fallback_minutes): void
+    {
+        $worked_minutes = (int) $this->wpdb->get_var(
+            $this->wpdb->prepare(
+                "SELECT COALESCE(SUM(worked_minutes), 0) FROM {$this->entries_table} WHERE user_id = %d AND work_date BETWEEN %s AND %s",
+                $user_id,
+                $start,
+                $end
+            )
+        );
+
+        $schedule_rows = $this->wpdb->get_results(
+            $this->wpdb->prepare(
+                "SELECT work_date, planned_minutes FROM {$this->schedule_table} WHERE user_id = %d AND work_date BETWEEN %s AND %s",
+                $user_id,
+                $start,
+                $end
+            ),
+            ARRAY_A
+        );
+
+        $planned_map = [];
+        $planned_minutes = 0;
+
+        if (is_array($schedule_rows)) {
+            foreach ($schedule_rows as $row) {
+                $date_key = (string) ($row['work_date'] ?? '');
+                if ($date_key === '') {
+                    continue;
+                }
+                $planned_map[$date_key] = (int) ($row['planned_minutes'] ?? 0);
+                $planned_minutes += (int) ($row['planned_minutes'] ?? 0);
+            }
+        }
+
+        if ($fallback_minutes > 0) {
+            $period_dates = $this->list_dates_between($start, $end);
+            foreach ($period_dates as $period_date) {
+                if (!array_key_exists($period_date, $planned_map)) {
+                    $planned_minutes += $fallback_minutes;
+                }
+            }
+        }
+
+        $difference_minutes = $worked_minutes - $planned_minutes;
+        $status = $this->resolve_status($difference_minutes);
+
+        $this->wpdb->replace(
+            $this->period_balance_table,
+            [
+                'user_id' => $user_id,
+                'period_type' => $period_type,
+                'period_key' => $period_key,
+                'worked_minutes' => $worked_minutes,
+                'planned_minutes' => $planned_minutes,
+                'difference_minutes' => $difference_minutes,
+                'extra_minutes' => max(0, $difference_minutes),
+                'status' => $status,
+                'calculated_at' => current_time('mysql'),
+            ],
+            ['%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%s']
+        );
+
+        $this->wpdb->delete(
+            $this->alerts_table,
+            ['user_id' => $user_id, 'period_type' => $period_type, 'period_key' => $period_key],
+            ['%d', '%s', '%s']
+        );
+
+        if ($status !== 'ok') {
+            $severity = $status === 'exceeded' ? 'critical' : 'warning';
+            $this->wpdb->insert(
+                $this->alerts_table,
+                [
+                    'user_id' => $user_id,
+                    'alert_type' => 'balance_' . $period_type,
+                    'period_type' => $period_type,
+                    'period_key' => $period_key,
+                    'message' => sprintf('Desviación %s (%s).', strtoupper($period_type), $this->format_minutes($difference_minutes)),
+                    'severity' => $severity,
+                ],
+                ['%d', '%s', '%s', '%s', '%s', '%s']
+            );
+        }
+    }
+
+    private function build_week_period(string $date): array
+    {
+        $ts = strtotime($date);
+        $monday = wp_date('Y-m-d', strtotime('monday this week', $ts));
+        $sunday = wp_date('Y-m-d', strtotime('sunday this week', $ts));
+
+        return [
+            'period_key' => wp_date('o-\\WW', $ts),
+            'start' => $monday,
+            'end' => $sunday,
+        ];
+    }
+
+    private function build_month_period(string $date): array
+    {
+        $ts = strtotime($date);
+        $start = wp_date('Y-m-01', $ts);
+        $end = wp_date('Y-m-t', $ts);
+
+        return [
+            'period_key' => wp_date('Y-m', $ts),
+            'start' => $start,
+            'end' => $end,
+        ];
+    }
+
+    private function list_dates_between(string $start, string $end): array
+    {
+        $start_dt = DateTimeImmutable::createFromFormat('Y-m-d', $start);
+        $end_dt = DateTimeImmutable::createFromFormat('Y-m-d', $end);
+
+        if (!$start_dt || !$end_dt || $start_dt > $end_dt) {
+            return [];
+        }
+
+        $dates = [];
+        $cursor = $start_dt;
+
+        while ($cursor <= $end_dt) {
+            $dates[] = $cursor->format('Y-m-d');
+            $cursor = $cursor->modify('+1 day');
+        }
+
+        return $dates;
+    }
+
+    private function resolve_status(int $difference_minutes): string
+    {
+        $delta = abs($difference_minutes);
+
+        if ($delta >= 300) {
+            return 'exceeded';
+        }
+
+        if ($delta >= 120) {
+            return 'warning';
+        }
+
+        return 'ok';
+    }
+
+    private function format_minutes(int $minutes): string
+    {
+        $sign = $minutes >= 0 ? '+' : '-';
+        $minutes = abs($minutes);
+        return sprintf('%s%02d:%02d', $sign, intdiv($minutes, 60), $minutes % 60);
+    }
+}
+
 final class Mi_Cuadrante_Control_Horas
 {
-    private const DB_VERSION = '1.2.0';
+    private const DB_VERSION = '1.3.0';
     private const OPTION_DB_VERSION = 'mcch_db_version';
     private const OPTION_CAP = 'mcch_manage_cap';
     private const OPTION_MIGRATION_USER_ID = 'mcch_migration_user_id';
@@ -25,6 +210,7 @@ final class Mi_Cuadrante_Control_Horas
     private const NONCE_ACTION_DELETE_SCHEDULE = 'mcch_delete_schedule';
 
     private static ?Mi_Cuadrante_Control_Horas $instance = null;
+    private ?MCCH_Legal_Calculator $legal_calculator = null;
 
     public static function instance(): Mi_Cuadrante_Control_Horas
     {
@@ -106,6 +292,15 @@ final class Mi_Cuadrante_Control_Horas
             'mcch-official-schedule',
             [$this, 'render_official_schedule_page']
         );
+
+        add_submenu_page(
+            'mcch-dashboard',
+            __('Vista RRHH', 'mi-cuadrante-control-horas'),
+            __('Vista RRHH', 'mi-cuadrante-control-horas'),
+            $capability,
+            'mcch-hr-overview',
+            [$this, 'render_hr_overview_page']
+        );
     }
 
     public function register_shortcodes(): void
@@ -179,6 +374,8 @@ final class Mi_Cuadrante_Control_Horas
             $this->redirect_with_notice('error', __('No se pudo guardar el registro.', 'mi-cuadrante-control-horas'));
         }
 
+        $this->recalculate_period_balance((int) $data['user_id'], (string) $data['work_date']);
+
         $this->redirect_with_notice('success', __('Registro guardado correctamente.', 'mi-cuadrante-control-horas'), $data['user_id']);
     }
 
@@ -208,11 +405,15 @@ final class Mi_Cuadrante_Control_Horas
             $where['user_id'] = $target_user_id;
         }
 
+        $reference_date = (string) $wpdb->get_var($wpdb->prepare("SELECT work_date FROM {$this->table_name()} WHERE id = %d", $entry_id));
         $result = $wpdb->delete($this->table_name(), $where, ['%d', '%d']);
 
         if ($result === false) {
             $this->redirect_with_notice('error', __('No se pudo eliminar el registro.', 'mi-cuadrante-control-horas'));
         }
+
+        $reference_date = $reference_date !== '' ? $reference_date : wp_date('Y-m-d');
+        $this->recalculate_period_balance((int) $entry_user_id, $reference_date);
 
         $this->redirect_with_notice('success', __('Registro eliminado.', 'mi-cuadrante-control-horas'), $target_user_id);
     }
@@ -251,6 +452,8 @@ final class Mi_Cuadrante_Control_Horas
             $this->redirect_with_notice('error', __('No se pudo guardar la planificación oficial.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
         }
 
+        $this->recalculate_period_balance((int) $data['user_id'], (string) $data['work_date']);
+
         $this->redirect_with_notice('success', __('Planificación oficial guardada correctamente.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
     }
 
@@ -267,11 +470,15 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         global $wpdb;
+        $reference_date = (string) $wpdb->get_var($wpdb->prepare("SELECT work_date FROM {$this->official_schedule_table_name()} WHERE id = %d", $schedule_id));
         $result = $wpdb->delete($this->official_schedule_table_name(), ['id' => $schedule_id, 'user_id' => $target_user_id], ['%d', '%d']);
 
         if ($result === false) {
             $this->redirect_with_notice('error', __('No se pudo eliminar la planificación oficial.', 'mi-cuadrante-control-horas'), $target_user_id, 'mcch-official-schedule');
         }
+
+        $reference_date = $reference_date !== '' ? $reference_date : wp_date('Y-m-d');
+        $this->recalculate_period_balance($target_user_id, $reference_date);
 
         $this->redirect_with_notice('success', __('Planificación oficial eliminada.', 'mi-cuadrante-control-horas'), $target_user_id, 'mcch-official-schedule');
     }
@@ -306,6 +513,7 @@ final class Mi_Cuadrante_Control_Horas
         $target_user_id = $this->resolve_target_user_id($_GET);
         $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
         $summary = $this->calculate_summary($entries);
+        $period_balance = $this->get_period_balance_overview($target_user_id, $period['month'], $period['year']);
         $edit_entry = $this->get_edit_entry($target_user_id);
 
         ?>
@@ -313,7 +521,7 @@ final class Mi_Cuadrante_Control_Horas
             <h1><?php esc_html_e('Mi Cuadrante - Control Personal', 'mi-cuadrante-control-horas'); ?></h1>
 
             <?php $this->render_notice(); ?>
-            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $edit_entry, true, $target_user_id); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $period_balance, $edit_entry, true, $target_user_id); ?>
         </div>
         <?php
     }
@@ -355,6 +563,44 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
+
+    public function render_hr_overview_page(): void
+    {
+        $this->assert_capability();
+
+        $period = $this->resolve_selected_month_year();
+        $target_user_id = $this->resolve_target_user_id($_GET);
+        $team_filter = isset($_GET['team']) ? sanitize_key((string) $_GET['team']) : '';
+        $rows = $this->get_hr_period_rows($period['month'], $period['year'], $target_user_id, $team_filter);
+        ?>
+        <div class="wrap mcch-wrap">
+            <h1><?php esc_html_e('Vista RRHH / Admin', 'mi-cuadrante-control-horas'); ?></h1>
+            <section class="mcch-card">
+                <?php $this->render_month_filter($period['month'], $period['year'], true, $target_user_id, 'mcch-hr-overview'); ?>
+                <form method="get" class="mcch-filter">
+                    <input type="hidden" name="page" value="mcch-hr-overview" />
+                    <input type="hidden" name="month" value="<?php echo esc_attr((string) $period['month']); ?>" />
+                    <input type="hidden" name="year" value="<?php echo esc_attr((string) $period['year']); ?>" />
+                    <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+                    <label>
+                        <?php esc_html_e('Equipo (rol)', 'mi-cuadrante-control-horas'); ?>
+                        <select name="team">
+                            <option value=""><?php esc_html_e('Todos', 'mi-cuadrante-control-horas'); ?></option>
+                            <?php foreach ($this->get_selectable_roles() as $role_key => $role_label) : ?>
+                                <option value="<?php echo esc_attr($role_key); ?>" <?php selected($team_filter, $role_key); ?>><?php echo esc_html($role_label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <button type="submit" class="button"><?php esc_html_e('Aplicar equipo', 'mi-cuadrante-control-horas'); ?></button>
+                </form>
+            </section>
+            <section class="mcch-card">
+                <?php $this->render_hr_table($rows); ?>
+            </section>
+        </div>
+        <?php
+    }
+
     public function shortcode_dashboard(array $atts = []): string
     {
         if (!is_user_logged_in()) {
@@ -365,11 +611,12 @@ final class Mi_Cuadrante_Control_Horas
         $target_user_id = $this->resolve_target_user_id($_GET);
         $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
         $summary = $this->calculate_summary($entries);
+        $period_balance = $this->get_period_balance_overview($target_user_id, $period['month'], $period['year']);
 
         ob_start();
         ?>
         <div class="mcch-wrap mcch-shortcode-dashboard">
-            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, null, false, $target_user_id); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $period_balance, null, false, $target_user_id); ?>
         </div>
         <?php
 
@@ -407,7 +654,7 @@ final class Mi_Cuadrante_Control_Horas
                 );
                 ?>
             </h3>
-            <?php $this->render_summary($summary); ?>
+            <?php $this->render_summary($summary, []); ?>
         </div>
         <?php
 
@@ -419,6 +666,7 @@ final class Mi_Cuadrante_Control_Horas
         int $current_year,
         array $entries,
         array $summary,
+        array $period_balance,
         ?array $edit_entry,
         bool $is_admin,
         int $target_user_id
@@ -433,7 +681,7 @@ final class Mi_Cuadrante_Control_Horas
             <section class="mcch-card">
                 <h2><?php esc_html_e('Resumen mensual', 'mi-cuadrante-control-horas'); ?></h2>
                 <?php $this->render_month_filter($current_month, $current_year, $is_admin, $target_user_id, 'mcch-dashboard'); ?>
-                <?php $this->render_summary($summary); ?>
+                <?php $this->render_summary($summary, $period_balance); ?>
             </section>
         </div>
 
@@ -696,7 +944,7 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_summary(array $summary): void
+    private function render_summary(array $summary, array $period_balance = []): void
     {
         $balance_class = $summary['difference_minutes'] >= 0 ? 'positive' : 'negative';
         ?>
@@ -710,6 +958,13 @@ final class Mi_Cuadrante_Control_Horas
                 <strong><?php esc_html_e('Diferencia (trabajadas - exigidas)', 'mi-cuadrante-control-horas'); ?>:</strong>
                 <?php echo esc_html($this->minutes_to_human($summary['difference_minutes'], true)); ?>
             </li>
+            <?php if (!empty($period_balance['week'])) : ?>
+                <li><strong><?php esc_html_e('Estado semanal ISO', 'mi-cuadrante-control-horas'); ?>:</strong> <span class="mcch-status mcch-status-<?php echo esc_attr($period_balance['week']['status']); ?>"><?php echo esc_html(strtoupper((string) $period_balance['week']['status'])); ?></span> (<?php echo esc_html($this->minutes_to_human((int) $period_balance['week']['difference_minutes'], true)); ?>)</li>
+            <?php endif; ?>
+            <?php if (!empty($period_balance['month'])) : ?>
+                <li><strong><?php esc_html_e('Estado mensual', 'mi-cuadrante-control-horas'); ?>:</strong> <span class="mcch-status mcch-status-<?php echo esc_attr($period_balance['month']['status']); ?>"><?php echo esc_html(strtoupper((string) $period_balance['month']['status'])); ?></span> (<?php echo esc_html($this->minutes_to_human((int) $period_balance['month']['difference_minutes'], true)); ?>)</li>
+            <?php endif; ?>
+            <li><strong><?php esc_html_e('Diferencia acumulada', 'mi-cuadrante-control-horas'); ?>:</strong> <?php echo esc_html($this->minutes_to_human((int) ($period_balance['accumulated_difference_minutes'] ?? $summary['difference_minutes']), true)); ?></li>
         </ul>
         <?php
     }
@@ -854,6 +1109,34 @@ final class Mi_Cuadrante_Control_Horas
         ];
     }
 
+
+    private function legal_calculator(): MCCH_Legal_Calculator
+    {
+        if ($this->legal_calculator instanceof MCCH_Legal_Calculator) {
+            return $this->legal_calculator;
+        }
+
+        global $wpdb;
+        $this->legal_calculator = new MCCH_Legal_Calculator(
+            $wpdb,
+            $this->table_name(),
+            $this->official_schedule_table_name(),
+            $this->period_balance_table_name(),
+            $this->alerts_table_name()
+        );
+
+        return $this->legal_calculator;
+    }
+
+    private function recalculate_period_balance(int $user_id, string $work_date): void
+    {
+        if ($user_id <= 0 || $work_date === '') {
+            return;
+        }
+
+        $this->legal_calculator()->recalculate_for_user_and_date($user_id, $work_date, $this->resolve_fallback_minutes());
+    }
+
     private function create_tables(): void
     {
         global $wpdb;
@@ -910,6 +1193,41 @@ final class Mi_Cuadrante_Control_Horas
             update_option(self::OPTION_SCHEDULE_FALLBACK_MINUTES, 480);
         }
 
+        $period_balance_sql = "CREATE TABLE {$this->period_balance_table_name()} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id BIGINT UNSIGNED NOT NULL,
+            period_type ENUM('week','month') NOT NULL,
+            period_key VARCHAR(20) NOT NULL,
+            worked_minutes INT NOT NULL DEFAULT 0,
+            planned_minutes INT NOT NULL DEFAULT 0,
+            difference_minutes INT NOT NULL DEFAULT 0,
+            extra_minutes INT NOT NULL DEFAULT 0,
+            status ENUM('ok','warning','exceeded') NOT NULL DEFAULT 'ok',
+            calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_user_period (user_id, period_type, period_key),
+            KEY idx_status (status)
+        ) {$charset};";
+
+        dbDelta($period_balance_sql);
+
+        $alerts_sql = "CREATE TABLE {$this->alerts_table_name()} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id BIGINT UNSIGNED NOT NULL,
+            alert_type VARCHAR(40) NOT NULL,
+            period_type ENUM('day','week','month') NOT NULL,
+            period_key VARCHAR(20) NOT NULL,
+            message VARCHAR(255) NOT NULL,
+            severity ENUM('info','warning','critical') NOT NULL DEFAULT 'warning',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_at DATETIME NULL,
+            PRIMARY KEY (id),
+            KEY idx_user_created (user_id, created_at),
+            KEY idx_alert_type (alert_type)
+        ) {$charset};";
+
+        dbDelta($alerts_sql);
+
         update_option(self::OPTION_DB_VERSION, self::DB_VERSION);
     }
 
@@ -925,6 +1243,20 @@ final class Mi_Cuadrante_Control_Horas
         global $wpdb;
 
         return $wpdb->prefix . 'mcch_official_schedule';
+    }
+
+    private function period_balance_table_name(): string
+    {
+        global $wpdb;
+
+        return $wpdb->prefix . 'mcch_period_balance';
+    }
+
+    private function alerts_table_name(): string
+    {
+        global $wpdb;
+
+        return $wpdb->prefix . 'mcch_alerts';
     }
 
     private function get_entries_by_month(int $month, int $year, int $target_user_id): array
@@ -1025,6 +1357,14 @@ final class Mi_Cuadrante_Control_Horas
                 $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d", $entry_id),
                 ARRAY_A
             );
+
+            return is_array($entry) ? $entry : null;
+        }
+
+        $entry = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d AND user_id = %d", $entry_id, $target_user_id),
+            ARRAY_A
+        );
 
         return is_array($entry) ? $entry : null;
     }
@@ -1151,6 +1491,41 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         return 0;
+    }
+
+    private function get_period_balance_overview(int $user_id, int $month, int $year): array
+    {
+        $month_start = sprintf('%04d-%02d-01', $year, $month);
+        $month_end = wp_date('Y-m-t', strtotime($month_start));
+        $month_key = wp_date('Y-m', strtotime($month_start));
+        $week_key = wp_date('o-\WW', strtotime($month_start));
+
+        global $wpdb;
+
+        $month_balance = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$this->period_balance_table_name()} WHERE user_id = %d AND period_type = 'month' AND period_key = %s", $user_id, $month_key),
+            ARRAY_A
+        );
+
+        $week_balance = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$this->period_balance_table_name()} WHERE user_id = %d AND period_type = 'week' AND period_key = %s", $user_id, $week_key),
+            ARRAY_A
+        );
+
+        $accumulated = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COALESCE(SUM(difference_minutes), 0) FROM {$this->period_balance_table_name()} WHERE user_id = %d AND period_type = 'month' AND period_key BETWEEN %s AND %s",
+                $user_id,
+                substr($month_start, 0, 7),
+                substr($month_end, 0, 7)
+            )
+        );
+
+        return [
+            'week' => is_array($week_balance) ? $week_balance : [],
+            'month' => is_array($month_balance) ? $month_balance : [],
+            'accumulated_difference_minutes' => $accumulated,
+        ];
     }
 
     private function minutes_to_human(int $minutes, bool $signed = false): string
@@ -1316,6 +1691,95 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         return $current_user_id;
+    }
+
+
+    private function get_selectable_roles(): array
+    {
+        global $wp_roles;
+
+        if (!isset($wp_roles->roles) || !is_array($wp_roles->roles)) {
+            return [];
+        }
+
+        $roles = [];
+        foreach ($wp_roles->roles as $role_key => $role_config) {
+            $roles[(string) $role_key] = isset($role_config['name']) ? (string) $role_config['name'] : (string) $role_key;
+        }
+
+        return $roles;
+    }
+
+    private function get_hr_period_rows(int $month, int $year, int $target_user_id, string $team_filter = ''): array
+    {
+        global $wpdb;
+
+        $month_key = sprintf('%04d-%02d', $year, $month);
+        $sql = "SELECT pb.user_id, pb.status, pb.difference_minutes, pb.worked_minutes, pb.planned_minutes, u.display_name
+            FROM {$this->period_balance_table_name()} pb
+            INNER JOIN {$wpdb->users} u ON u.ID = pb.user_id
+            WHERE pb.period_type = 'month' AND pb.period_key = %s";
+        $params = [$month_key];
+
+        if ($target_user_id > 0) {
+            $sql .= ' AND pb.user_id = %d';
+            $params[] = $target_user_id;
+        }
+
+        $sql .= ' ORDER BY u.display_name ASC';
+        $rows = $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A);
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        if ($team_filter === '') {
+            return $rows;
+        }
+
+        $filtered = [];
+        foreach ($rows as $row) {
+            $user = get_user_by('id', (int) $row['user_id']);
+            $roles = $user instanceof WP_User ? $user->roles : [];
+            if (in_array($team_filter, $roles, true)) {
+                $filtered[] = $row;
+            }
+        }
+
+        return $filtered;
+    }
+
+    private function render_hr_table(array $rows): void
+    {
+        if (empty($rows)) {
+            echo '<p>' . esc_html__('No hay datos de balance para los filtros seleccionados.', 'mi-cuadrante-control-horas') . '</p>';
+            return;
+        }
+        ?>
+        <div class="mcch-table-wrapper">
+            <table class="widefat striped">
+                <thead>
+                    <tr>
+                        <th><?php esc_html_e('Empleado', 'mi-cuadrante-control-horas'); ?></th>
+                        <th><?php esc_html_e('Trabajadas', 'mi-cuadrante-control-horas'); ?></th>
+                        <th><?php esc_html_e('Planificadas', 'mi-cuadrante-control-horas'); ?></th>
+                        <th><?php esc_html_e('Diferencia', 'mi-cuadrante-control-horas'); ?></th>
+                        <th><?php esc_html_e('Estado', 'mi-cuadrante-control-horas'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($rows as $row) : ?>
+                    <tr>
+                        <td><?php echo esc_html((string) $row['display_name']); ?></td>
+                        <td><?php echo esc_html($this->minutes_to_human((int) $row['worked_minutes'])); ?></td>
+                        <td><?php echo esc_html($this->minutes_to_human((int) $row['planned_minutes'])); ?></td>
+                        <td><?php echo esc_html($this->minutes_to_human((int) $row['difference_minutes'], true)); ?></td>
+                        <td><span class="mcch-status mcch-status-<?php echo esc_attr((string) $row['status']); ?>"><?php echo esc_html(strtoupper((string) $row['status'])); ?></span></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php
     }
 
     private function get_selectable_users(): array

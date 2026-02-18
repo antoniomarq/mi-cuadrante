@@ -70,3 +70,26 @@
 .mcch-inline-form {
   display: inline;
 }
+
+.mcch-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.mcch-status-ok {
+  background: #d1e7dd;
+  color: #0f5132;
+}
+
+.mcch-status-warning {
+  background: #fff3cd;
+  color: #664d03;
+}
+
+.mcch-status-exceeded {
+  background: #f8d7da;
+  color: #842029;
+}
