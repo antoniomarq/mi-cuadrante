@@ -713,6 +713,21 @@ final class Mi_Cuadrante_Control_Horas
             return '<p>' . esc_html__('Debes iniciar sesión para ver tu cuadrante de horas.', 'mi-cuadrante-control-horas') . '</p>';
         }
 
+        wp_enqueue_style(
+            'mcch-admin-style',
+            plugins_url('assets/css/admin.css', __FILE__),
+            [],
+            self::DB_VERSION
+        );
+
+        wp_enqueue_script(
+            'mcch-admin-script',
+            plugins_url('assets/js/admin.js', __FILE__),
+            [],
+            self::DB_VERSION,
+            true
+        );
+
         $period = $this->resolve_selected_month_year();
         $target_user_id = $this->resolve_target_user_id($_GET);
         $entries = $this->get_entries_by_month($period['month'], $period['year'], $target_user_id);
@@ -822,7 +837,7 @@ final class Mi_Cuadrante_Control_Horas
             'id' => 0,
             'work_date' => wp_date('Y-m-d'),
             'shift' => '',
-            'worked_minutes' => 0
+            'worked_minutes' => 0,
             'actual_start_time' => null,
             'actual_end_time' => null,
             'company_start_time' => null,
@@ -884,12 +899,27 @@ final class Mi_Cuadrante_Control_Horas
 
             <label>
                 <?php esc_html_e('Inicio real', 'mi-cuadrante-control-horas'); ?>
-                <input type="time" name="actual_start_time" value="<?php echo esc_attr((string) ($entry['actual_start_time'] ?? '')); ?>" />
+                <input type="time" id="mcch_actual_start_time" name="actual_start_time" value="<?php echo esc_attr((string) ($entry['actual_start_time'] ?? '')); ?>" />
             </label>
 
             <label>
                 <?php esc_html_e('Fin real', 'mi-cuadrante-control-horas'); ?>
-                <input type="time" name="actual_end_time" value="<?php echo esc_attr((string) ($entry['actual_end_time'] ?? '')); ?>" />
+                <input type="time" id="mcch_actual_end_time" name="actual_end_time" value="<?php echo esc_attr((string) ($entry['actual_end_time'] ?? '')); ?>" />
+            </label>
+
+            <label>
+                <?php esc_html_e('Inicio empresa', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" id="mcch_company_start_time" name="company_start_time" value="<?php echo esc_attr((string) ($entry['company_start_time'] ?? '')); ?>" />
+            </label>
+
+            <label>
+                <?php esc_html_e('Fin empresa', 'mi-cuadrante-control-horas'); ?>
+                <input type="time" id="mcch_company_end_time" name="company_end_time" value="<?php echo esc_attr((string) ($entry['company_end_time'] ?? '')); ?>" />
+            </label>
+
+            <label class="mcch-checkbox">
+                <input type="checkbox" id="mcch_same_as_company_shift" name="same_as_company_shift" value="1" />
+                <?php esc_html_e('El turno real coincide con el turno empresa', 'mi-cuadrante-control-horas'); ?>
             </label>
 
             <label>
@@ -1287,6 +1317,8 @@ final class Mi_Cuadrante_Control_Horas
 
     private function sanitize_entry_data(array $source): array
     {
+        unset($source['same_as_company_shift']);
+
         $target_user_id = $this->resolve_target_user_id($source);
 
         return [
