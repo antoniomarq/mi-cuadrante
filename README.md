@@ -48,6 +48,13 @@ Puedes usar los siguientes shortcodes en páginas o entradas de WordPress:
     - `[mcch_hours_summary period="week"]`
   - Si el usuario no ha iniciado sesión, muestra un mensaje amigable indicando que debe autenticarse.
 
+- `[mcch_company_schedule_form]`
+  - Muestra el formulario de planificación oficial para el usuario logado.
+  - Incluye filtro por mes y año y la tabla de planificación del periodo.
+  - Permite guardar y eliminar planificación oficial usando las acciones del plugin.
+  - Si el usuario no ha iniciado sesión, muestra un mensaje amigable indicando que debe autenticarse.
+
+
 ### Ejemplos de uso en páginas de WordPress
 
 1. Crea una página nueva (por ejemplo: **Mi Cuadrante**).
@@ -56,6 +63,7 @@ Puedes usar los siguientes shortcodes en páginas o entradas de WordPress:
    - `[mcch_dashboard]`
    - `[mcch_hours_summary period="month"]`
    - `[mcch_hours_summary period="week"]`
+   - `[mcch_company_schedule_form]`
 4. Publica la página y comprueba el resultado con un usuario logado.
 
 ## Datos y privacidad

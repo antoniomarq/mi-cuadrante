@@ -337,6 +337,7 @@ final class Mi_Cuadrante_Control_Horas
     {
         add_shortcode('mcch_dashboard', [$this, 'shortcode_dashboard']);
         add_shortcode('mcch_hours_summary', [$this, 'shortcode_hours_summary']);
+        add_shortcode('mcch_company_schedule_form', [$this, 'shortcode_company_schedule_form']);
     }
 
     public function enqueue_assets(string $hook): void
@@ -784,6 +785,44 @@ final class Mi_Cuadrante_Control_Horas
         return (string) ob_get_clean();
     }
 
+    public function shortcode_company_schedule_form(array $atts = []): string
+    {
+        if (!is_user_logged_in()) {
+            return '<p>' . esc_html__('Debes iniciar sesión para gestionar la planificación oficial.', 'mi-cuadrante-control-horas') . '</p>';
+        }
+
+        $period = $this->resolve_selected_month_year();
+        $target_user_id = $this->resolve_target_user_id($_GET);
+        $entries = $this->get_schedule_by_month($period['month'], $period['year'], $target_user_id);
+        $edit_entry = $this->get_edit_schedule($target_user_id);
+
+        ob_start();
+        ?>
+        <div class="mcch-wrap mcch-shortcode-company-schedule">
+            <?php $this->render_notice(); ?>
+
+            <div class="mcch-grid">
+                <section class="mcch-card">
+                    <h2><?php echo $edit_entry ? esc_html__('Editar planificación', 'mi-cuadrante-control-horas') : esc_html__('Nueva planificación', 'mi-cuadrante-control-horas'); ?></h2>
+                    <?php $this->render_schedule_form($edit_entry, $target_user_id); ?>
+                </section>
+
+                <section class="mcch-card">
+                    <h2><?php esc_html_e('Filtro de periodo', 'mi-cuadrante-control-horas'); ?></h2>
+                    <?php $this->render_month_filter($period['month'], $period['year'], false, $target_user_id); ?>
+                </section>
+            </div>
+
+            <section class="mcch-card">
+                <h2><?php esc_html_e('Planificación del mes', 'mi-cuadrante-control-horas'); ?></h2>
+                <?php $this->render_schedule_table($entries, $target_user_id, false, $period['month'], $period['year']); ?>
+            </section>
+        </div>
+        <?php
+
+        return (string) ob_get_clean();
+    }
+
     private function get_shortcode_definitions(): array
     {
         return [
@@ -796,6 +835,11 @@ final class Mi_Cuadrante_Control_Horas
                 'tag' => '[mcch_hours_summary]',
                 'description' => __('Muestra un resumen rápido de horas. Permite usar atributos month, year y user_id.', 'mi-cuadrante-control-horas'),
                 'example' => '[mcch_hours_summary month="3" year="2026" user_id="12"]',
+            ],
+            [
+                'tag' => '[mcch_company_schedule_form]',
+                'description' => __('Muestra el formulario de cuadrante oficial, filtro mensual y tabla de planificación del usuario.', 'mi-cuadrante-control-horas'),
+                'example' => '[mcch_company_schedule_form]',
             ],
         ];
     }
@@ -1286,7 +1330,7 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_schedule_table(array $entries, int $target_user_id): void
+    private function render_schedule_table(array $entries, int $target_user_id, bool $is_admin = true, int $current_month = 0, int $current_year = 0): void
     {
         if (empty($entries)) {
             echo '<p>' . esc_html__('No hay planificación oficial para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
@@ -1297,6 +1341,13 @@ final class Mi_Cuadrante_Control_Horas
         if (!is_admin()) {
             $redirect_to = esc_url_raw(wp_get_referer() ?: get_permalink());
         }
+
+        if ($current_month <= 0 || $current_year <= 0) {
+            $period = $this->resolve_selected_month_year();
+            $current_month = $period['month'];
+            $current_year = $period['year'];
+        }
+
         ?>
         <div class="mcch-table-wrapper">
             <table class="widefat striped">
@@ -1324,7 +1375,29 @@ final class Mi_Cuadrante_Control_Horas
                         <td data-label="<?php esc_attr_e('Notas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['notes']); ?></td>
                         <td data-label="<?php esc_attr_e('Acciones', 'mi-cuadrante-control-horas'); ?>">
                             <div class="mcch-action-buttons">
-                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-official-schedule', 'edit_schedule' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
+                                <?php
+                                $edit_url = add_query_arg(
+                                    [
+                                        'page' => 'mcch-official-schedule',
+                                        'edit_schedule' => (int) $entry['id'],
+                                        'user_id' => $target_user_id,
+                                    ],
+                                    admin_url('admin.php')
+                                );
+
+                                if (!$is_admin) {
+                                    $edit_url = add_query_arg(
+                                        [
+                                            'edit_schedule' => (int) $entry['id'],
+                                            'month' => $current_month,
+                                            'year' => $current_year,
+                                            'user_id' => $target_user_id,
+                                        ]
+                                    );
+                                }
+                                ?>
+
+                                <a class="button button-small" href="<?php echo esc_url($edit_url); ?>">
                                     <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
                                 </a>
                                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
