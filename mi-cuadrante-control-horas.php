@@ -374,6 +374,10 @@ final class Mi_Cuadrante_Control_Horas
             $this->redirect_with_notice('error', (string) $data['work_date_error']);
         }
 
+        if (!empty($data['hours_error'])) {
+            $this->redirect_with_notice('error', (string) $data['hours_error']);
+        }
+
         if (($data['company_start_time'] === null || $data['company_end_time'] === null) && !empty($data['work_date'])) {
             $official_times = $this->get_official_schedule_times((int) $data['user_id'], (string) $data['work_date']);
             if ($data['company_start_time'] === null) {
@@ -389,6 +393,7 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         unset($data['work_date_error']);
+        unset($data['hours_error']);
 
         global $wpdb;
         $table = $this->table_name();
@@ -955,7 +960,17 @@ final class Mi_Cuadrante_Control_Horas
 
             <label>
                 <?php esc_html_e('Horas trabajadas', 'mi-cuadrante-control-horas'); ?>
-                <input type="time" name="worked_time" value="<?php echo esc_attr($this->minutes_to_time((int) $entry['worked_minutes'])); ?>" required />
+                <input
+                    type="number"
+                    name="worked_hours"
+                    min="0"
+                    max="23"
+                    step="1"
+                    value="<?php echo esc_attr($this->minutes_to_hours_field_value((int) $entry['worked_minutes'])); ?>"
+                    placeholder="08"
+                    required
+                />
+                <small><?php esc_html_e('Introduce solo horas enteras (00-23).', 'mi-cuadrante-control-horas'); ?></small>
             </label>
 
             <label>
@@ -985,12 +1000,31 @@ final class Mi_Cuadrante_Control_Horas
 
             <label>
                 <?php esc_html_e('Horas exigidas por empresa', 'mi-cuadrante-control-horas'); ?>
-                <input type="time" name="expected_time" value="<?php echo esc_attr($this->minutes_to_time((int) $entry['expected_minutes'])); ?>" required />
+                <input
+                    type="number"
+                    name="expected_hours"
+                    min="0"
+                    max="23"
+                    step="1"
+                    value="<?php echo esc_attr($this->minutes_to_hours_field_value((int) $entry['expected_minutes'])); ?>"
+                    placeholder="08"
+                    required
+                />
+                <small><?php esc_html_e('Introduce solo horas enteras (00-23).', 'mi-cuadrante-control-horas'); ?></small>
             </label>
 
             <label>
                 <?php esc_html_e('Horas extra', 'mi-cuadrante-control-horas'); ?>
-                <input type="time" name="extra_time" value="<?php echo esc_attr($this->minutes_to_time((int) $entry['extra_minutes'])); ?>" />
+                <input
+                    type="number"
+                    name="extra_hours"
+                    min="0"
+                    max="23"
+                    step="1"
+                    value="<?php echo esc_attr($this->minutes_to_hours_field_value((int) $entry['extra_minutes'])); ?>"
+                    placeholder="00"
+                />
+                <small><?php esc_html_e('Introduce solo horas enteras (00-23).', 'mi-cuadrante-control-horas'); ?></small>
             </label>
 
             <label class="mcch-checkbox">
@@ -1422,23 +1456,83 @@ final class Mi_Cuadrante_Control_Horas
         $target_user_id = $this->resolve_target_user_id($source);
         $work_date = isset($source['work_date']) ? sanitize_text_field((string) $source['work_date']) : '';
         $parsed_work_date = $this->parse_manual_work_date($work_date);
+        $worked_hours = $this->sanitize_hour_input($source['worked_hours'] ?? null, true);
+        $expected_hours = $this->sanitize_hour_input($source['expected_hours'] ?? null, true);
+        $extra_hours = $this->sanitize_hour_input($source['extra_hours'] ?? null, false);
+
+        $hours_error = '';
+        if ($worked_hours['error'] !== '') {
+            $hours_error = sprintf(
+                /* translators: %s: field label. */
+                __('%s: introduce una hora entera entre 0 y 23.', 'mi-cuadrante-control-horas'),
+                __('Horas trabajadas', 'mi-cuadrante-control-horas')
+            );
+        } elseif ($expected_hours['error'] !== '') {
+            $hours_error = sprintf(
+                /* translators: %s: field label. */
+                __('%s: introduce una hora entera entre 0 y 23.', 'mi-cuadrante-control-horas'),
+                __('Horas exigidas por empresa', 'mi-cuadrante-control-horas')
+            );
+        } elseif ($extra_hours['error'] !== '') {
+            $hours_error = sprintf(
+                /* translators: %s: field label. */
+                __('%s: introduce una hora entera entre 0 y 23.', 'mi-cuadrante-control-horas'),
+                __('Horas extra', 'mi-cuadrante-control-horas')
+            );
+        }
 
         return [
             'user_id' => $target_user_id,
             'work_date' => $parsed_work_date['normalized'],
             'work_date_error' => $parsed_work_date['error'],
+            'hours_error' => $hours_error,
             'shift' => isset($source['shift']) ? sanitize_text_field($source['shift']) : '',
-            'worked_minutes' => $this->time_to_minutes($source['worked_time'] ?? '00:00'),
+            'worked_minutes' => ((int) $worked_hours['value']) * 60,
             'actual_start_time' => $this->sanitize_hhmm_or_null($source['actual_start_time'] ?? null),
             'actual_end_time' => $this->sanitize_hhmm_or_null($source['actual_end_time'] ?? null),
             'company_start_time' => $this->sanitize_hhmm_or_null($source['company_start_time'] ?? null),
             'company_end_time' => $this->sanitize_hhmm_or_null($source['company_end_time'] ?? null),
-            'extra_minutes' => $this->time_to_minutes($source['extra_time'] ?? '00:00'),
+            'extra_minutes' => ((int) $extra_hours['value']) * 60,
             'vacation_day' => isset($source['vacation_day']) ? 1 : 0,
             'personal_day' => isset($source['personal_day']) ? 1 : 0,
             'notes' => isset($source['notes']) ? sanitize_textarea_field($source['notes']) : '',
-            'expected_minutes' => $this->time_to_minutes($source['expected_time'] ?? '00:00'),
+            'expected_minutes' => ((int) $expected_hours['value']) * 60,
             'turn_type' => $this->sanitize_turn_type($source['turn_type'] ?? 'normal'),
+        ];
+    }
+
+
+    private function sanitize_hour_input($value, bool $required = true): array
+    {
+        $raw_value = sanitize_text_field((string) ($value ?? ''));
+        $raw_value = trim($raw_value);
+
+        if ($raw_value === '') {
+            return [
+                'value' => 0,
+                'error' => $required ? 'required' : '',
+            ];
+        }
+
+        if (!preg_match('/^\d{1,2}$/', $raw_value)) {
+            return [
+                'value' => 0,
+                'error' => 'invalid',
+            ];
+        }
+
+        $hours = (int) $raw_value;
+
+        if ($hours < 0 || $hours > 23) {
+            return [
+                'value' => 0,
+                'error' => 'range',
+            ];
+        }
+
+        return [
+            'value' => $hours,
+            'error' => '',
         ];
     }
 
@@ -2129,6 +2223,15 @@ final class Mi_Cuadrante_Control_Horas
         $remaining = $minutes % 60;
 
         return sprintf('%02d:%02d', min($hours, 23), $remaining);
+    }
+
+
+    private function minutes_to_hours_field_value(int $minutes): string
+    {
+        $minutes = max(0, $minutes);
+        $hours = intdiv($minutes, 60);
+
+        return sprintf('%02d', min($hours, 23));
     }
 
     private function time_to_minutes(string $value): int
