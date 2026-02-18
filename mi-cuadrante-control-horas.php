@@ -33,6 +33,7 @@ final class Mi_Cuadrante_Control_Horas
     private function __construct()
     {
         add_action('plugins_loaded', [$this, 'load_textdomain']);
+        add_action('init', [$this, 'register_shortcodes']);
         add_action('admin_menu', [$this, 'register_admin_menu']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('admin_post_mcch_save_entry', [$this, 'handle_save_entry']);
@@ -84,6 +85,12 @@ final class Mi_Cuadrante_Control_Horas
             'dashicons-calendar-alt',
             56
         );
+    }
+
+    public function register_shortcodes(): void
+    {
+        add_shortcode('mcch_dashboard', [$this, 'shortcode_dashboard']);
+        add_shortcode('mcch_hours_summary', [$this, 'shortcode_hours_summary']);
     }
 
     public function enqueue_assets(string $hook): void
@@ -172,18 +179,8 @@ final class Mi_Cuadrante_Control_Horas
     {
         $this->assert_capability();
 
-        $current_month = isset($_GET['month']) ? absint($_GET['month']) : (int) wp_date('n');
-        $current_year = isset($_GET['year']) ? absint($_GET['year']) : (int) wp_date('Y');
-
-        if ($current_month < 1 || $current_month > 12) {
-            $current_month = (int) wp_date('n');
-        }
-
-        if ($current_year < 2000 || $current_year > 2100) {
-            $current_year = (int) wp_date('Y');
-        }
-
-        $entries = $this->get_entries_by_month($current_month, $current_year);
+        $period = $this->resolve_selected_month_year();
+        $entries = $this->get_entries_by_month($period['month'], $period['year']);
         $summary = $this->calculate_summary($entries);
         $edit_entry = $this->get_edit_entry();
 
@@ -192,25 +189,94 @@ final class Mi_Cuadrante_Control_Horas
             <h1><?php esc_html_e('Mi Cuadrante - Control Personal', 'mi-cuadrante-control-horas'); ?></h1>
 
             <?php $this->render_notice(); ?>
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, $edit_entry, true); ?>
+        </div>
+        <?php
+    }
 
-            <div class="mcch-grid">
-                <section class="mcch-card">
-                    <h2><?php echo $edit_entry ? esc_html__('Editar registro', 'mi-cuadrante-control-horas') : esc_html__('Nuevo registro', 'mi-cuadrante-control-horas'); ?></h2>
-                    <?php $this->render_entry_form($edit_entry); ?>
-                </section>
+    public function shortcode_dashboard(array $atts = []): string
+    {
+        if (!is_user_logged_in()) {
+            return '<p>' . esc_html__('Debes iniciar sesión para ver tu cuadrante de horas.', 'mi-cuadrante-control-horas') . '</p>';
+        }
 
-                <section class="mcch-card">
-                    <h2><?php esc_html_e('Resumen mensual', 'mi-cuadrante-control-horas'); ?></h2>
-                    <?php $this->render_month_filter($current_month, $current_year); ?>
-                    <?php $this->render_summary($summary); ?>
-                </section>
-            </div>
+        $period = $this->resolve_selected_month_year();
+        $entries = $this->get_entries_by_month($period['month'], $period['year']);
+        $summary = $this->calculate_summary($entries);
+
+        ob_start();
+        ?>
+        <div class="mcch-wrap mcch-shortcode-dashboard">
+            <?php $this->render_dashboard_content($period['month'], $period['year'], $entries, $summary, null, false); ?>
+        </div>
+        <?php
+
+        return (string) ob_get_clean();
+    }
+
+    public function shortcode_hours_summary(array $atts = []): string
+    {
+        if (!is_user_logged_in()) {
+            return '<p>' . esc_html__('Debes iniciar sesión para consultar el resumen de horas.', 'mi-cuadrante-control-horas') . '</p>';
+        }
+
+        $atts = shortcode_atts(
+            [
+                'period' => 'month',
+            ],
+            $atts,
+            'mcch_hours_summary'
+        );
+
+        $period = is_string($atts['period']) ? sanitize_key($atts['period']) : 'month';
+        $entries = $period === 'week' ? $this->get_entries_by_week() : $this->get_entries_by_month((int) wp_date('n'), (int) wp_date('Y'));
+        $summary = $this->calculate_summary($entries);
+
+        ob_start();
+        ?>
+        <div class="mcch-wrap mcch-shortcode-summary">
+            <h3>
+                <?php
+                echo esc_html(
+                    $period === 'week'
+                        ? __('Resumen semanal', 'mi-cuadrante-control-horas')
+                        : __('Resumen mensual', 'mi-cuadrante-control-horas')
+                );
+                ?>
+            </h3>
+            <?php $this->render_summary($summary); ?>
+        </div>
+        <?php
+
+        return (string) ob_get_clean();
+    }
+
+    private function render_dashboard_content(
+        int $current_month,
+        int $current_year,
+        array $entries,
+        array $summary,
+        ?array $edit_entry,
+        bool $is_admin
+    ): void {
+        ?>
+        <div class="mcch-grid">
+            <section class="mcch-card">
+                <h2><?php echo $edit_entry ? esc_html__('Editar registro', 'mi-cuadrante-control-horas') : esc_html__('Nuevo registro', 'mi-cuadrante-control-horas'); ?></h2>
+                <?php $this->render_entry_form($edit_entry); ?>
+            </section>
 
             <section class="mcch-card">
-                <h2><?php esc_html_e('Registros del mes', 'mi-cuadrante-control-horas'); ?></h2>
-                <?php $this->render_entries_table($entries); ?>
+                <h2><?php esc_html_e('Resumen mensual', 'mi-cuadrante-control-horas'); ?></h2>
+                <?php $this->render_month_filter($current_month, $current_year, $is_admin); ?>
+                <?php $this->render_summary($summary); ?>
             </section>
         </div>
+
+        <section class="mcch-card">
+            <h2><?php esc_html_e('Registros del mes', 'mi-cuadrante-control-horas'); ?></h2>
+            <?php $this->render_entries_table($entries, $is_admin); ?>
+        </section>
         <?php
     }
 
@@ -306,11 +372,13 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_month_filter(int $month, int $year): void
+    private function render_month_filter(int $month, int $year, bool $is_admin = true): void
     {
         ?>
         <form method="get" class="mcch-filter">
-            <input type="hidden" name="page" value="mcch-dashboard" />
+            <?php if ($is_admin) : ?>
+                <input type="hidden" name="page" value="mcch-dashboard" />
+            <?php endif; ?>
             <label>
                 <?php esc_html_e('Mes', 'mi-cuadrante-control-horas'); ?>
                 <select name="month">
@@ -348,7 +416,7 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
-    private function render_entries_table(array $entries): void
+    private function render_entries_table(array $entries, bool $show_actions = true): void
     {
         if (empty($entries)) {
             echo '<p>' . esc_html__('No hay registros para este periodo.', 'mi-cuadrante-control-horas') . '</p>';
@@ -368,7 +436,9 @@ final class Mi_Cuadrante_Control_Horas
                     <th><?php esc_html_e('Vacaciones', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Asuntos propios', 'mi-cuadrante-control-horas'); ?></th>
                     <th><?php esc_html_e('Notas', 'mi-cuadrante-control-horas'); ?></th>
-                    <th><?php esc_html_e('Acciones', 'mi-cuadrante-control-horas'); ?></th>
+                    <?php if ($show_actions) : ?>
+                        <th><?php esc_html_e('Acciones', 'mi-cuadrante-control-horas'); ?></th>
+                    <?php endif; ?>
                 </tr>
                 </thead>
                 <tbody>
@@ -383,19 +453,21 @@ final class Mi_Cuadrante_Control_Horas
                         <td><?php echo (int) $entry['vacation_day'] === 1 ? '✔' : '—'; ?></td>
                         <td><?php echo (int) $entry['personal_day'] === 1 ? '✔' : '—'; ?></td>
                         <td><?php echo esc_html($entry['notes']); ?></td>
-                        <td>
-                            <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id']], admin_url('admin.php'))); ?>">
-                                <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
-                            </a>
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
-                                <input type="hidden" name="action" value="mcch_delete_entry" />
-                                <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
-                                <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
-                                <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
-                                    <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
-                                </button>
-                            </form>
-                        </td>
+                        <?php if ($show_actions) : ?>
+                            <td>
+                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id']], admin_url('admin.php'))); ?>">
+                                    <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
+                                </a>
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
+                                    <input type="hidden" name="action" value="mcch_delete_entry" />
+                                    <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+                                    <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
+                                    <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
+                                        <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
+                                    </button>
+                                </form>
+                            </td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -474,6 +546,44 @@ final class Mi_Cuadrante_Control_Horas
         );
 
         return is_array($rows) ? $rows : [];
+    }
+
+    private function get_entries_by_week(): array
+    {
+        global $wpdb;
+
+        $start = wp_date('Y-m-d', strtotime('monday this week'));
+        $end = wp_date('Y-m-d', strtotime('sunday this week'));
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT * FROM {$this->table_name()} WHERE work_date BETWEEN %s AND %s ORDER BY work_date DESC, id DESC",
+                $start,
+                $end
+            ),
+            ARRAY_A
+        );
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    private function resolve_selected_month_year(): array
+    {
+        $current_month = isset($_GET['month']) ? absint($_GET['month']) : (int) wp_date('n');
+        $current_year = isset($_GET['year']) ? absint($_GET['year']) : (int) wp_date('Y');
+
+        if ($current_month < 1 || $current_month > 12) {
+            $current_month = (int) wp_date('n');
+        }
+
+        if ($current_year < 2000 || $current_year > 2100) {
+            $current_year = (int) wp_date('Y');
+        }
+
+        return [
+            'month' => $current_month,
+            'year' => $current_year,
+        ];
     }
 
     private function get_edit_entry(): ?array
