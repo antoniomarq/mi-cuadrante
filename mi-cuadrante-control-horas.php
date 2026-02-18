@@ -370,6 +370,10 @@ final class Mi_Cuadrante_Control_Horas
         $entry_id = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
         $data = $this->sanitize_entry_data($_POST);
 
+        if (!empty($data['work_date_error'])) {
+            $this->redirect_with_notice('error', (string) $data['work_date_error']);
+        }
+
         if (($data['company_start_time'] === null || $data['company_end_time'] === null) && !empty($data['work_date'])) {
             $official_times = $this->get_official_schedule_times((int) $data['user_id'], (string) $data['work_date']);
             if ($data['company_start_time'] === null) {
@@ -383,6 +387,8 @@ final class Mi_Cuadrante_Control_Horas
         if (empty($data['work_date'])) {
             $this->redirect_with_notice('error', __('La fecha es obligatoria.', 'mi-cuadrante-control-horas'));
         }
+
+        unset($data['work_date_error']);
 
         global $wpdb;
         $table = $this->table_name();
@@ -901,6 +907,7 @@ final class Mi_Cuadrante_Control_Horas
         $entry['actual_end_time'] = $this->sanitize_hhmm_or_null($entry['actual_end_time'] ?? null);
         $entry['company_start_time'] = $this->sanitize_hhmm_or_null($entry['company_start_time'] ?? null);
         $entry['company_end_time'] = $this->sanitize_hhmm_or_null($entry['company_end_time'] ?? null);
+        $entry['work_date'] = $this->format_work_date_for_manual_input((string) ($entry['work_date'] ?? ''));
         $redirect_to = $this->get_current_request_url();
         ?>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
@@ -912,7 +919,17 @@ final class Mi_Cuadrante_Control_Horas
 
             <label>
                 <?php esc_html_e('Fecha', 'mi-cuadrante-control-horas'); ?>
-                <input type="date" name="work_date" value="<?php echo esc_attr($entry['work_date']); ?>" required />
+                <input
+                    type="text"
+                    name="work_date"
+                    value="<?php echo esc_attr($entry['work_date']); ?>"
+                    placeholder="DD-MM-AA"
+                    pattern="\d{2}-\d{2}-\d{2}"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    required
+                />
+                <small><?php esc_html_e('Formato obligatorio: DD-MM-AA', 'mi-cuadrante-control-horas'); ?></small>
             </label>
 
             <label>
@@ -1250,7 +1267,7 @@ final class Mi_Cuadrante_Control_Horas
                 <tbody>
                 <?php foreach ($entries as $entry) : ?>
                     <tr>
-                        <td data-label="<?php esc_attr_e('Fecha', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['work_date']); ?></td>
+                        <td data-label="<?php esc_attr_e('Fecha', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_work_date_for_display((string) $entry['work_date'])); ?></td>
                         <td data-label="<?php esc_attr_e('Turno', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['shift']); ?></td>
                         <td data-label="<?php esc_attr_e('Tipo', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
                         <td data-label="<?php esc_attr_e('Trabajadas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->minutes_to_human((int) $entry['worked_minutes'])); ?></td>
@@ -1344,7 +1361,7 @@ final class Mi_Cuadrante_Control_Horas
                 <tbody>
                 <?php foreach ($entries as $entry) : ?>
                     <tr>
-                        <td data-label="<?php esc_attr_e('Fecha', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['work_date']); ?></td>
+                        <td data-label="<?php esc_attr_e('Fecha', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_work_date_for_display((string) $entry['work_date'])); ?></td>
                         <td data-label="<?php esc_attr_e('Turno oficial', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['shift_name']); ?></td>
                         <td data-label="<?php esc_attr_e('Tipo', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
                         <td data-label="<?php esc_attr_e('Planificadas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->minutes_to_human((int) $entry['planned_minutes'])); ?></td>
@@ -1403,10 +1420,13 @@ final class Mi_Cuadrante_Control_Horas
         unset($source['same_as_company_shift']);
 
         $target_user_id = $this->resolve_target_user_id($source);
+        $work_date = isset($source['work_date']) ? sanitize_text_field((string) $source['work_date']) : '';
+        $parsed_work_date = $this->parse_manual_work_date($work_date);
 
         return [
             'user_id' => $target_user_id,
-            'work_date' => isset($source['work_date']) ? sanitize_text_field($source['work_date']) : '',
+            'work_date' => $parsed_work_date['normalized'],
+            'work_date_error' => $parsed_work_date['error'],
             'shift' => isset($source['shift']) ? sanitize_text_field($source['shift']) : '',
             'worked_minutes' => $this->time_to_minutes($source['worked_time'] ?? '00:00'),
             'actual_start_time' => $this->sanitize_hhmm_or_null($source['actual_start_time'] ?? null),
@@ -1420,6 +1440,62 @@ final class Mi_Cuadrante_Control_Horas
             'expected_minutes' => $this->time_to_minutes($source['expected_time'] ?? '00:00'),
             'turn_type' => $this->sanitize_turn_type($source['turn_type'] ?? 'normal'),
         ];
+    }
+
+    private function parse_manual_work_date(string $work_date): array
+    {
+        $work_date = trim($work_date);
+
+        if ($work_date === '') {
+            return [
+                'normalized' => '',
+                'error' => __('La fecha es obligatoria.', 'mi-cuadrante-control-horas'),
+            ];
+        }
+
+        if (!preg_match('/^(\d{2})-(\d{2})-(\d{2})$/', $work_date, $matches)) {
+            return [
+                'normalized' => '',
+                'error' => __('Formato de fecha inválido. Usa DD-MM-AA.', 'mi-cuadrante-control-horas'),
+            ];
+        }
+
+        $day = (int) $matches[1];
+        $month = (int) $matches[2];
+        $year_two_digits = (int) $matches[3];
+
+        // Regla para año de 2 dígitos: se interpreta siempre como 20xx (00 => 2000, 99 => 2099).
+        $year = 2000 + $year_two_digits;
+
+        if (!checkdate($month, $day, $year)) {
+            return [
+                'normalized' => '',
+                'error' => __('La fecha indicada no es válida.', 'mi-cuadrante-control-horas'),
+            ];
+        }
+
+        return [
+            'normalized' => sprintf('%04d-%02d-%02d', $year, $month, $day),
+            'error' => '',
+        ];
+    }
+
+    private function format_work_date_for_manual_input(string $work_date): string
+    {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $work_date);
+
+        if (!$date instanceof DateTimeImmutable) {
+            return '';
+        }
+
+        return $date->format('d-m-y');
+    }
+
+    private function format_work_date_for_display(string $work_date): string
+    {
+        $formatted = $this->format_work_date_for_manual_input($work_date);
+
+        return $formatted !== '' ? $formatted : $work_date;
     }
 
     private function sanitize_schedule_data(array $source): array
