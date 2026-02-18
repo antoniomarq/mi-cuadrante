@@ -208,6 +208,9 @@ final class Mi_Cuadrante_Control_Horas
     private const NONCE_ACTION_DELETE = 'mcch_delete_entry';
     private const NONCE_ACTION_SAVE_SCHEDULE = 'mcch_save_schedule';
     private const NONCE_ACTION_DELETE_SCHEDULE = 'mcch_delete_schedule';
+    private const NONCE_ACTION_RECALCULATE_NOW = 'mcch_recalculate_now';
+    private const CRON_HOOK_RECALCULATE_OPEN_PERIODS = 'mcch_recalculate_open_periods_event';
+    private const USER_META_LAST_PERIOD_CALCULATIONS = 'mcch_last_period_calculations';
 
     private static ?Mi_Cuadrante_Control_Horas $instance = null;
     private ?MCCH_Legal_Calculator $legal_calculator = null;
@@ -232,6 +235,8 @@ final class Mi_Cuadrante_Control_Horas
         add_action('admin_post_mcch_save_schedule', [$this, 'handle_save_schedule']);
         add_action('admin_post_mcch_delete_schedule', [$this, 'handle_delete_schedule']);
         add_action('admin_post_mcch_save_schedule_fallback', [$this, 'handle_save_schedule_fallback']);
+        add_action('admin_post_mcch_recalculate_now', [$this, 'handle_recalculate_now']);
+        add_action(self::CRON_HOOK_RECALCULATE_OPEN_PERIODS, [$this, 'handle_scheduled_recalculation']);
 
         if (is_admin()) {
             add_action('admin_init', [$this, 'maybe_upgrade_db']);
@@ -245,11 +250,27 @@ final class Mi_Cuadrante_Control_Horas
         if (!get_option(self::OPTION_CAP)) {
             update_option(self::OPTION_CAP, 'manage_options');
         }
+
+        if (!wp_next_scheduled(self::CRON_HOOK_RECALCULATE_OPEN_PERIODS)) {
+            wp_schedule_event(self::next_nightly_timestamp(), 'daily', self::CRON_HOOK_RECALCULATE_OPEN_PERIODS);
+        }
     }
 
     public static function deactivate(): void
     {
-        // Intencionadamente vacío: mantenemos datos para histórico personal.
+        wp_clear_scheduled_hook(self::CRON_HOOK_RECALCULATE_OPEN_PERIODS);
+    }
+
+    private static function next_nightly_timestamp(): int
+    {
+        $ts = strtotime('tomorrow 03:00:00');
+
+        if (!is_int($ts) || $ts <= time()) {
+            return time() + DAY_IN_SECONDS;
+        }
+
+        return $ts;
+
     }
 
     public function load_textdomain(): void
@@ -374,7 +395,8 @@ final class Mi_Cuadrante_Control_Horas
             $this->redirect_with_notice('error', __('No se pudo guardar el registro.', 'mi-cuadrante-control-horas'));
         }
 
-        $this->recalculate_period_balance((int) $data['user_id'], (string) $data['work_date']);
+        $this->recalculate_period_balance((int) $data['user_id'], (string) $data['work_date'], 'save_entry');
+        $this->recalculate_open_periods_for_user((int) $data['user_id'], 'save_entry_open_periods');
 
         $this->redirect_with_notice('success', __('Registro guardado correctamente.', 'mi-cuadrante-control-horas'), $data['user_id']);
     }
@@ -413,7 +435,8 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         $reference_date = $reference_date !== '' ? $reference_date : wp_date('Y-m-d');
-        $this->recalculate_period_balance((int) $entry_user_id, $reference_date);
+        $this->recalculate_period_balance((int) $entry_user_id, $reference_date, 'delete_entry');
+        $this->recalculate_open_periods_for_user((int) $entry_user_id, 'delete_entry_open_periods');
 
         $this->redirect_with_notice('success', __('Registro eliminado.', 'mi-cuadrante-control-horas'), $target_user_id);
     }
@@ -452,7 +475,7 @@ final class Mi_Cuadrante_Control_Horas
             $this->redirect_with_notice('error', __('No se pudo guardar la planificación oficial.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
         }
 
-        $this->recalculate_period_balance((int) $data['user_id'], (string) $data['work_date']);
+        $this->recalculate_period_balance((int) $data['user_id'], (string) $data['work_date'], 'save_schedule');
 
         $this->redirect_with_notice('success', __('Planificación oficial guardada correctamente.', 'mi-cuadrante-control-horas'), $data['user_id'], 'mcch-official-schedule');
     }
@@ -478,7 +501,7 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         $reference_date = $reference_date !== '' ? $reference_date : wp_date('Y-m-d');
-        $this->recalculate_period_balance($target_user_id, $reference_date);
+        $this->recalculate_period_balance($target_user_id, $reference_date, 'delete_schedule');
 
         $this->redirect_with_notice('success', __('Planificación oficial eliminada.', 'mi-cuadrante-control-horas'), $target_user_id, 'mcch-official-schedule');
     }
@@ -503,6 +526,33 @@ final class Mi_Cuadrante_Control_Horas
         update_option(self::OPTION_SCHEDULE_FALLBACK_MINUTES, $minutes);
 
         $this->redirect_with_notice('success', __('Fallback de cuadrante oficial actualizado.', 'mi-cuadrante-control-horas'), null, 'mcch-official-schedule');
+    }
+
+    public function handle_recalculate_now(): void
+    {
+        $this->assert_capability();
+        check_admin_referer(self::NONCE_ACTION_RECALCULATE_NOW);
+
+        if (!$this->can_manage_all_entries()) {
+            $this->redirect_with_notice('error', __('No tienes permisos para recalcular todos los periodos.', 'mi-cuadrante-control-horas'), null, 'mcch-hr-overview');
+        }
+
+        $processed = $this->recalculate_open_periods_for_all_active_users('manual_admin');
+        $this->redirect_with_notice(
+            'success',
+            sprintf(
+                /* translators: %d: number of users recalculated */
+                __('Recalculado completado para %d usuarios activos.', 'mi-cuadrante-control-horas'),
+                $processed
+            ),
+            null,
+            'mcch-hr-overview'
+        );
+    }
+
+    public function handle_scheduled_recalculation(): void
+    {
+        $this->recalculate_open_periods_for_all_active_users('cron_daily');
     }
 
     public function render_admin_page(): void
@@ -577,6 +627,7 @@ final class Mi_Cuadrante_Control_Horas
             <h1><?php esc_html_e('Vista RRHH / Admin', 'mi-cuadrante-control-horas'); ?></h1>
             <section class="mcch-card">
                 <?php $this->render_month_filter($period['month'], $period['year'], true, $target_user_id, 'mcch-hr-overview'); ?>
+                <?php $this->render_recalculate_now_form(); ?>
                 <form method="get" class="mcch-filter">
                     <input type="hidden" name="page" value="mcch-hr-overview" />
                     <input type="hidden" name="month" value="<?php echo esc_attr((string) $period['month']); ?>" />
@@ -944,6 +995,22 @@ final class Mi_Cuadrante_Control_Horas
         <?php
     }
 
+    private function render_recalculate_now_form(): void
+    {
+        if (!$this->can_manage_all_entries()) {
+            return;
+        }
+        ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-form">
+            <input type="hidden" name="action" value="mcch_recalculate_now" />
+            <?php wp_nonce_field(self::NONCE_ACTION_RECALCULATE_NOW); ?>
+            <button type="submit" class="button button-secondary">
+                <?php esc_html_e('Recalcular ahora', 'mi-cuadrante-control-horas'); ?>
+            </button>
+        </form>
+        <?php
+    }
+
     private function render_summary(array $summary, array $period_balance = []): void
     {
         $balance_class = $summary['difference_minutes'] >= 0 ? 'positive' : 'negative';
@@ -1128,13 +1195,84 @@ final class Mi_Cuadrante_Control_Horas
         return $this->legal_calculator;
     }
 
-    private function recalculate_period_balance(int $user_id, string $work_date): void
+    private function recalculate_period_balance(int $user_id, string $work_date, string $trigger = 'on_demand'): void
     {
         if ($user_id <= 0 || $work_date === '') {
             return;
         }
 
         $this->legal_calculator()->recalculate_for_user_and_date($user_id, $work_date, $this->resolve_fallback_minutes());
+        $this->store_last_calculation_marks($user_id, $work_date, $trigger);
+    }
+
+    private function recalculate_open_periods_for_user(int $user_id, string $trigger): void
+    {
+        if ($user_id <= 0) {
+            return;
+        }
+
+        $this->recalculate_period_balance($user_id, wp_date('Y-m-d'), $trigger);
+    }
+
+    private function recalculate_open_periods_for_all_active_users(string $trigger): int
+    {
+        $user_ids = $this->get_active_user_ids();
+
+        foreach ($user_ids as $user_id) {
+            $this->recalculate_open_periods_for_user($user_id, $trigger);
+        }
+
+        return count($user_ids);
+    }
+
+    private function get_active_user_ids(): array
+    {
+        $users = get_users(
+            [
+                'fields' => ['ID'],
+                'orderby' => 'ID',
+                'order' => 'ASC',
+            ]
+        );
+
+        $ids = [];
+
+        foreach ($users as $user) {
+            $ids[] = (int) $user->ID;
+        }
+
+        return array_values(array_unique(array_filter($ids)));
+    }
+
+    private function store_last_calculation_marks(int $user_id, string $work_date, string $trigger): void
+    {
+        $ts = strtotime($work_date);
+
+        if ($user_id <= 0 || $work_date === '' || !is_int($ts)) {
+            return;
+        }
+
+        $week_key = wp_date('o-\\WW', $ts);
+        $month_key = wp_date('Y-m', $ts);
+        $marks = get_user_meta($user_id, self::USER_META_LAST_PERIOD_CALCULATIONS, true);
+
+        if (!is_array($marks)) {
+            $marks = [];
+        }
+
+        $mark = [
+            'timestamp' => current_time('mysql'),
+            'trigger' => $trigger,
+        ];
+
+        $marks['week:' . $week_key] = $mark;
+        $marks['month:' . $month_key] = $mark;
+
+        if (count($marks) > 50) {
+            $marks = array_slice($marks, -50, null, true);
+        }
+
+        update_user_meta($user_id, self::USER_META_LAST_PERIOD_CALCULATIONS, $marks);
     }
 
     private function create_tables(): void
