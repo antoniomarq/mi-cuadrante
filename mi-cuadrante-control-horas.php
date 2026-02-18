@@ -1214,36 +1214,38 @@ final class Mi_Cuadrante_Control_Horas
                 <tbody>
                 <?php foreach ($entries as $entry) : ?>
                     <tr>
-                        <td><?php echo esc_html($entry['work_date']); ?></td>
-                        <td><?php echo esc_html($entry['shift']); ?></td>
-                        <td><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
-                        <td><?php echo esc_html($this->minutes_to_human((int) $entry['worked_minutes'])); ?></td>
-                        <td><?php echo esc_html($this->format_time_value($entry['actual_start_time'] ?? null)); ?></td>
-                        <td><?php echo esc_html($this->format_time_value($entry['actual_end_time'] ?? null)); ?></td>
-                        <td><?php echo esc_html($this->minutes_to_human((int) $entry['expected_minutes'])); ?></td>
-                        <td><?php echo esc_html($this->format_time_value($entry['company_start_time'] ?? null)); ?></td>
-                        <td><?php echo esc_html($this->format_time_value($entry['company_end_time'] ?? null)); ?></td>
-                        <td><?php echo esc_html($this->minutes_to_human((int) $entry['extra_minutes'])); ?></td>
-                        <td><?php echo (int) $entry['vacation_day'] === 1 ? '✔' : '—'; ?></td>
-                        <td><?php echo (int) $entry['personal_day'] === 1 ? '✔' : '—'; ?></td>
-                        <td><?php echo esc_html($entry['notes']); ?></td>
+                        <td data-label="<?php esc_attr_e('Fecha', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['work_date']); ?></td>
+                        <td data-label="<?php esc_attr_e('Turno', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['shift']); ?></td>
+                        <td data-label="<?php esc_attr_e('Tipo', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
+                        <td data-label="<?php esc_attr_e('Trabajadas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->minutes_to_human((int) $entry['worked_minutes'])); ?></td>
+                        <td data-label="<?php esc_attr_e('Inicio real', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_time_value($entry['actual_start_time'] ?? null)); ?></td>
+                        <td data-label="<?php esc_attr_e('Fin real', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_time_value($entry['actual_end_time'] ?? null)); ?></td>
+                        <td data-label="<?php esc_attr_e('Exigidas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->minutes_to_human((int) $entry['expected_minutes'])); ?></td>
+                        <td data-label="<?php esc_attr_e('Inicio empresa', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_time_value($entry['company_start_time'] ?? null)); ?></td>
+                        <td data-label="<?php esc_attr_e('Fin empresa', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_time_value($entry['company_end_time'] ?? null)); ?></td>
+                        <td data-label="<?php esc_attr_e('Extra', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->minutes_to_human((int) $entry['extra_minutes'])); ?></td>
+                        <td data-label="<?php esc_attr_e('Vacaciones', 'mi-cuadrante-control-horas'); ?>"><?php echo (int) $entry['vacation_day'] === 1 ? '✔' : '—'; ?></td>
+                        <td data-label="<?php esc_attr_e('Asuntos propios', 'mi-cuadrante-control-horas'); ?>"><?php echo (int) $entry['personal_day'] === 1 ? '✔' : '—'; ?></td>
+                        <td data-label="<?php esc_attr_e('Notas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['notes']); ?></td>
                         <?php if ($show_actions) : ?>
-                            <td>
-                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
-                                    <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
-                                </a>
-                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
-                                    <input type="hidden" name="action" value="mcch_delete_entry" />
-                                    <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
-                                    <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
-                                    <?php if ($redirect_to !== '') : ?>
-                                        <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
-                                    <?php endif; ?>
-                                    <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
-                                    <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
-                                        <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
-                                    </button>
-                                </form>
+                            <td data-label="<?php esc_attr_e('Acciones', 'mi-cuadrante-control-horas'); ?>">
+                                <div class="mcch-action-buttons">
+                                    <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-dashboard', 'edit' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
+                                        <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
+                                    </a>
+                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
+                                        <input type="hidden" name="action" value="mcch_delete_entry" />
+                                        <input type="hidden" name="entry_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+                                        <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+                                        <?php if ($redirect_to !== '') : ?>
+                                            <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
+                                        <?php endif; ?>
+                                        <?php wp_nonce_field(self::NONCE_ACTION_DELETE); ?>
+                                        <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar este registro?', 'mi-cuadrante-control-horas')); ?>');">
+                                            <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
+                                        </button>
+                                    </form>
+                                </div>
                             </td>
                         <?php endif; ?>
                     </tr>
@@ -1283,29 +1285,31 @@ final class Mi_Cuadrante_Control_Horas
                 <tbody>
                 <?php foreach ($entries as $entry) : ?>
                     <tr>
-                        <td><?php echo esc_html($entry['work_date']); ?></td>
-                        <td><?php echo esc_html($entry['shift_name']); ?></td>
-                        <td><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
-                        <td><?php echo esc_html($this->minutes_to_human((int) $entry['planned_minutes'])); ?></td>
-                        <td><?php echo esc_html($this->format_time_value($entry['planned_start_time'] ?? null)); ?></td>
-                        <td><?php echo esc_html($this->format_time_value($entry['planned_end_time'] ?? null)); ?></td>
-                        <td><?php echo esc_html($entry['notes']); ?></td>
-                        <td>
-                            <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-official-schedule', 'edit_schedule' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
-                                <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
-                            </a>
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
-                                <input type="hidden" name="action" value="mcch_delete_schedule" />
-                                <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
-                                <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
-                                <?php if ($redirect_to !== '') : ?>
-                                    <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
-                                <?php endif; ?>
-                                <?php wp_nonce_field(self::NONCE_ACTION_DELETE_SCHEDULE); ?>
-                                <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar esta planificación oficial?', 'mi-cuadrante-control-horas')); ?>');">
-                                    <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
-                                </button>
-                            </form>
+                        <td data-label="<?php esc_attr_e('Fecha', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['work_date']); ?></td>
+                        <td data-label="<?php esc_attr_e('Turno oficial', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['shift_name']); ?></td>
+                        <td data-label="<?php esc_attr_e('Tipo', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->get_turn_type_label((string) ($entry['turn_type'] ?? 'normal'))); ?></td>
+                        <td data-label="<?php esc_attr_e('Planificadas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->minutes_to_human((int) $entry['planned_minutes'])); ?></td>
+                        <td data-label="<?php esc_attr_e('Inicio planificado', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_time_value($entry['planned_start_time'] ?? null)); ?></td>
+                        <td data-label="<?php esc_attr_e('Fin planificado', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($this->format_time_value($entry['planned_end_time'] ?? null)); ?></td>
+                        <td data-label="<?php esc_attr_e('Notas', 'mi-cuadrante-control-horas'); ?>"><?php echo esc_html($entry['notes']); ?></td>
+                        <td data-label="<?php esc_attr_e('Acciones', 'mi-cuadrante-control-horas'); ?>">
+                            <div class="mcch-action-buttons">
+                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['page' => 'mcch-official-schedule', 'edit_schedule' => (int) $entry['id'], 'user_id' => $target_user_id], admin_url('admin.php'))); ?>">
+                                    <?php esc_html_e('Editar', 'mi-cuadrante-control-horas'); ?>
+                                </a>
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mcch-inline-form">
+                                    <input type="hidden" name="action" value="mcch_delete_schedule" />
+                                    <input type="hidden" name="schedule_id" value="<?php echo esc_attr((string) $entry['id']); ?>" />
+                                    <input type="hidden" name="user_id" value="<?php echo esc_attr((string) $target_user_id); ?>" />
+                                    <?php if ($redirect_to !== '') : ?>
+                                        <input type="hidden" name="redirect_to" value="<?php echo esc_attr($redirect_to); ?>" />
+                                    <?php endif; ?>
+                                    <?php wp_nonce_field(self::NONCE_ACTION_DELETE_SCHEDULE); ?>
+                                    <button type="submit" class="button button-small button-link-delete" onclick="return confirm('<?php echo esc_js(__('¿Eliminar esta planificación oficial?', 'mi-cuadrante-control-horas')); ?>');">
+                                        <?php esc_html_e('Eliminar', 'mi-cuadrante-control-horas'); ?>
+                                    </button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>
