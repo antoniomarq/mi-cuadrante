@@ -136,10 +136,18 @@ final class Mi_Cuadrante_Control_Horas
         $table = $this->table_name();
 
         if ($entry_id > 0) {
+            $entry_user_id = $this->get_entry_user_id($entry_id);
+
+            if ($entry_user_id <= 0 || !$this->can_manage_entry($entry_user_id)) {
+                $this->log_unauthorized_attempt('save_entry', $entry_id, $entry_user_id);
+                $this->redirect_with_notice('error', __('No tienes permisos para realizar esta acción.', 'mi-cuadrante-control-horas'));
+            }
+
+            $data['user_id'] = $entry_user_id;
             $result = $wpdb->update(
                 $table,
                 $data,
-                ['id' => $entry_id, 'user_id' => $data['user_id']],
+                ['id' => $entry_id, 'user_id' => $entry_user_id],
                 ['%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%d', '%s'],
                 ['%d', '%d']
             );
@@ -171,8 +179,20 @@ final class Mi_Cuadrante_Control_Horas
         }
 
         global $wpdb;
+        $entry_user_id = $this->get_entry_user_id($entry_id);
 
-        $result = $wpdb->delete($this->table_name(), ['id' => $entry_id, 'user_id' => $target_user_id], ['%d', '%d']);
+        if ($entry_user_id <= 0 || !$this->can_manage_entry($entry_user_id)) {
+            $this->log_unauthorized_attempt('delete_entry', $entry_id, $entry_user_id);
+            $this->redirect_with_notice('error', __('No tienes permisos para realizar esta acción.', 'mi-cuadrante-control-horas'), $target_user_id);
+        }
+
+        $where = ['id' => $entry_id, 'user_id' => $entry_user_id];
+
+        if (!$this->can_manage_all_entries()) {
+            $where['user_id'] = $target_user_id;
+        }
+
+        $result = $wpdb->delete($this->table_name(), $where, ['%d', '%d']);
 
         if ($result === false) {
             $this->redirect_with_notice('error', __('No se pudo eliminar el registro.', 'mi-cuadrante-control-horas'));
@@ -633,12 +653,30 @@ final class Mi_Cuadrante_Control_Horas
 
         global $wpdb;
 
-        $entry = $wpdb->get_row(
-            $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d AND user_id = %d", $entry_id, $target_user_id),
-            ARRAY_A
-        );
+        if ($this->can_manage_all_entries()) {
+            $entry = $wpdb->get_row(
+                $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d", $entry_id),
+                ARRAY_A
+            );
+        } else {
+            $entry = $wpdb->get_row(
+                $wpdb->prepare("SELECT * FROM {$this->table_name()} WHERE id = %d AND user_id = %d", $entry_id, $target_user_id),
+                ARRAY_A
+            );
+        }
 
-        return is_array($entry) ? $entry : null;
+        if (!is_array($entry)) {
+            $this->log_unauthorized_attempt('edit_entry', $entry_id, $target_user_id);
+            return null;
+        }
+
+        if (!$this->can_manage_entry((int) $entry['user_id'])) {
+            $this->log_unauthorized_attempt('edit_entry', $entry_id, (int) $entry['user_id']);
+            return null;
+        }
+
+        return $entry;
+
     }
 
     private function calculate_summary(array $entries): array
@@ -761,6 +799,52 @@ final class Mi_Cuadrante_Control_Horas
     private function can_manage_all_entries(): bool
     {
         return current_user_can($this->get_capability()) || current_user_can('manage_options');
+    }
+
+    private function can_manage_entry(int $entry_user_id): bool
+    {
+        if ($entry_user_id <= 0) {
+            return false;
+        }
+
+        if ($this->can_manage_all_entries()) {
+            return true;
+        }
+
+        return get_current_user_id() === $entry_user_id;
+    }
+
+    private function get_entry_user_id(int $entry_id): int
+    {
+        if ($entry_id <= 0) {
+            return 0;
+        }
+
+        global $wpdb;
+
+        $entry_user_id = $wpdb->get_var(
+            $wpdb->prepare("SELECT user_id FROM {$this->table_name()} WHERE id = %d", $entry_id)
+        );
+
+        return absint($entry_user_id);
+    }
+
+    private function log_unauthorized_attempt(string $action, int $entry_id, int $entry_user_id = 0): void
+    {
+        error_log(
+            sprintf(
+                '[MCCH] Unauthorized attempt: %s',
+                wp_json_encode(
+                    [
+                        'action' => sanitize_key($action),
+                        'entry_id' => absint($entry_id),
+                        'entry_user_id' => absint($entry_user_id),
+                        'current_user_id' => get_current_user_id(),
+                        'ip' => isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '',
+                    ]
+                )
+            )
+        );
     }
 
     private function resolve_target_user_id(array $source): int
