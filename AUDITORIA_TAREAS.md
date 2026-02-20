@@ -1,33 +1,43 @@
-# Auditoría rápida y tareas propuestas
+# Revisión de la base de código y backlog propuesto
 
-## Hallazgos clave
+## Problemas identificados
 
-1. **Error tipográfico en documentación técnica**: en `IMPLEMENTACION_MULTIUSUARIO.md` aparecen formas sin tilde como "recalculo", cuando en español normativo corresponde "recálculo".
-2. **Fallo en redirección de mensajes flash**: `redirect_with_notice()` aplica `rawurlencode()` antes de `add_query_arg()`, lo que puede provocar doble codificación y mensajes con `%20`/`%C3%A1` visibles.
-3. **Discrepancia entre documentación y UI**: el README usa "Tipo de turno", pero en el formulario del panel la etiqueta del campo `turn_type` muestra "Tipo de día".
-4. **Pruebas automáticas inexistentes para lógica crítica**: no hay test suite para conversiones horarias ni para el cálculo del resumen mensual.
+1. **Error tipográfico en documentación técnica**
+   - En `IMPLEMENTACION_MULTIUSUARIO.md` aparece "recalculo" sin tilde; en español corresponde "recálculo".
 
-## Backlog propuesto (4 tareas)
+2. **Fallo funcional en notificaciones tras redirección**
+   - `redirect_with_notice()` aplica `rawurlencode()` a `mcch_message` antes de llamar a `add_query_arg()`.
+   - `add_query_arg()` vuelve a codificar el valor, y en la interfaz pueden aparecer secuencias `%20`, `%C3%A1`, etc.
 
-### Tarea 1 — Corregir error tipográfico
+3. **Discrepancia entre documentación y UI**
+   - El `README.md` describe el campo como **"Tipo de turno"**.
+   - En el formulario de administración (`mi-cuadrante-control-horas.php`) se muestra **"Tipo de día"** para el mismo campo (`turn_type`).
+
+4. **Cobertura de pruebas insuficiente en lógica crítica**
+   - No hay una suite automatizada para validar de forma unitaria `time_to_minutes()`, `minutes_to_time()` y `calculate_summary()`.
+
+## Conjunto de tareas propuesto
+
+### 1) Corregir error tipográfico
 - **Objetivo**: normalizar ortografía en documentación técnica.
-- **Cambio propuesto**: eliminar `rawurlencode()` en `redirect_with_notice()` y pasar el texto limpio a `add_query_arg()`.
-- **Criterio de aceptación**: tras guardar/eliminar, los avisos se muestran correctamente en `render_notice()` sin secuencias de escape visibles.
+- **Cambio propuesto**: sustituir "recalculo" por "recálculo" en `IMPLEMENTACION_MULTIUSUARIO.md`.
+- **Criterio de aceptación**: no quedan ocurrencias de "recalculo" en documentación mantenida.
 
-### Tarea 2 — Solucionar fallo de codificación en redirecciones
+### 2) Solucionar fallo de codificación en redirecciones
 - **Objetivo**: evitar doble codificación de `mcch_message`.
-- **Cambio propuesto**: eliminar `rawurlencode()` en `redirect_with_notice()` y delegar el encoding a `add_query_arg()`.
-- **Criterio de aceptación**: al guardar/eliminar un registro, el mensaje se renderiza correctamente en `render_notice()` sin secuencias `%XX` visibles.
+- **Cambio propuesto**: eliminar `rawurlencode()` en `redirect_with_notice()` y dejar que `add_query_arg()` gestione el encoding.
+- **Criterio de aceptación**: al guardar o eliminar un registro, `render_notice()` muestra el texto legible (sin `%XX`).
 
-### Tarea 3 — Corregir discrepancia de documentación
-- **Objetivo**: usar una única terminología para `turn_type`.
-- **Cambio propuesto**: elegir "Tipo de turno" o "Tipo de día" y aplicarlo de forma consistente en README y formulario admin.
-- **Criterio de aceptación**: documentación y pantalla de edición muestran el mismo término.
+### 3) Corregir discrepancia de documentación/UI
+- **Objetivo**: usar terminología coherente para `turn_type`.
+- **Cambio propuesto**: escoger un único término (por ejemplo, "Tipo de turno") y aplicarlo de forma consistente en `README.md` y etiquetas del admin.
+- **Criterio de aceptación**: documentación y pantalla de edición muestran exactamente el mismo texto para ese campo.
 
-### Tarea 4 — Mejorar pruebas de lógica horaria
-- **Objetivo**: elevar confianza en funciones de negocio.
+### 4) Mejorar pruebas de la lógica horaria
+- **Objetivo**: elevar la confianza en reglas de negocio.
 - **Cambio propuesto**:
-  - añadir pruebas unitarias para `time_to_minutes()` (válidos, inválidos y bordes),
-  - pruebas para `minutes_to_time()` (0, intermedios y tope 23:59),
-  - pruebas de `calculate_summary()` con días normales, vacaciones y asuntos propios.
-- **Criterio de aceptación**: existe una suite ejecutable localmente que cubre al menos los escenarios positivos y negativos de las tres funciones.
+  - añadir pruebas unitarias para `time_to_minutes()` (entradas válidas, inválidas y casos borde),
+  - añadir pruebas para `minutes_to_time()` (0, valores intermedios, límite superior aceptado),
+  - añadir pruebas para `calculate_summary()` con mezcla de días normales, vacaciones y asuntos propios.
+- **Criterio de aceptación**: existe suite ejecutable localmente que cubre escenarios positivos y negativos de las tres funciones.
+
